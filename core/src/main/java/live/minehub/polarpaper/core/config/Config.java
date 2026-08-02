@@ -185,7 +185,8 @@ public record Config(
             this.compressionLevel = record.compressionLevel;
             this.worldType = record.worldType;
             this.environment = record.environment;
-            this.gamerules = record.gamerules;
+            // Copied so that building on top of an existing config does not write back into it
+            this.gamerules = new HashMap<>(record.gamerules);
         }
 
         public Builder fromWorld(World world) {

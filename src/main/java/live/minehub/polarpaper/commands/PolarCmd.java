@@ -16,15 +16,30 @@ import org.bukkit.World;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
 public abstract class PolarCmd {
 
+    private static final long WORLD_NAME_CACHE_NANOS = TimeUnit.SECONDS.toNanos(5);
+
+    private static volatile List<String> cachedWorldNames;
+    private static volatile long cachedWorldNamesAt;
+
     private final String name;
     private final String description;
+    private final List<String> aliases;
+
     public PolarCmd(String name, String description) {
+        this(name, description, List.of());
+    }
+
+    public PolarCmd(String name, String description, List<String> aliases) {
         this.name = name;
         this.description = description;
+        this.aliases = List.copyOf(aliases);
     }
 
     protected abstract int executeDefault(CommandContext<CommandSourceStack> ctx);
@@ -32,16 +47,43 @@ public abstract class PolarCmd {
     protected abstract void addToBuilder(LiteralArgumentBuilder<CommandSourceStack> builder);
 
     public void registerCommand(LiteralArgumentBuilder<CommandSourceStack> rootBuilder) {
-        LiteralArgumentBuilder<CommandSourceStack> commandArgument = Commands.literal(getName())
+        rootBuilder.then(buildSubcommand(name).build());
+        for (String alias : aliases) {
+            rootBuilder.then(buildSubcommand(alias).build());
+        }
+    }
+
+    /**
+     * Aliases are built from the same definition and share the primary permission, so granting
+     * {@code polarpaper.goto} is enough for {@code /polar tp} as well.
+     */
+    private LiteralArgumentBuilder<CommandSourceStack> buildSubcommand(String literal) {
+        LiteralArgumentBuilder<CommandSourceStack> builder = Commands.literal(literal)
                 .requires(source -> source.getSender().hasPermission(getPermission()))
                 .executes(this::executeDefault);
 
-        addToBuilder(commandArgument);
-        rootBuilder.then(commandArgument.build());
+        addToBuilder(builder);
+        return builder;
     }
 
     public String getName() {
         return name;
+    }
+
+    public List<String> getAliases() {
+        return aliases;
+    }
+
+    /**
+     * Every literal this subcommand answers to, the primary name first.
+     */
+    public List<String> getLiterals() {
+        if (aliases.isEmpty()) return List.of(name);
+
+        List<String> literals = new ArrayList<>(aliases.size() + 1);
+        literals.add(name);
+        literals.addAll(aliases);
+        return literals;
     }
 
     public String getDescription() {
@@ -55,24 +97,37 @@ public abstract class PolarCmd {
     public RequiredArgumentBuilder<CommandSourceStack, String> createFileWorldNameArgument(boolean greedy) {
         return Commands.argument("world name", greedy ? StringArgumentType.greedyString() : StringArgumentType.string())
                 .suggests((_, s) -> {
-                    Path pluginFolder = PolarPaper.getPlugin().getDataPath();
-                    Path worldsFolder = pluginFolder.resolve("worlds");
+                    for (String worldName : listSavedWorldNames()) {
+                        if (!worldName.toLowerCase().startsWith(s.getRemainingLowerCase())) continue;
 
-                    // TODO: cache list?
-                    try (Stream<Path> list = Files.list(worldsFolder)) {
-                        list.forEach(path -> {
-                            String worldName = path.getFileName().toString().replaceAll(".polar$", "");
-
-                            if (!worldName.toLowerCase().startsWith(s.getRemainingLowerCase())) return;
-
-                            s.suggest(worldName);
-                        });
-                    } catch (IOException e) {
-//                        throw new RuntimeException(e);
+                        s.suggest(worldName);
                     }
 
                     return s.buildFuture();
                 });
+    }
+
+    /**
+     * The names of the worlds in the worlds folder, cached briefly.
+     * <p>
+     * Brigadier asks for suggestions on every keystroke, so without this every character typed lists the
+     * folder from disk on the thread handling the command.
+     */
+    private static List<String> listSavedWorldNames() {
+        long now = System.nanoTime();
+        if (cachedWorldNames != null && now - cachedWorldNamesAt < WORLD_NAME_CACHE_NANOS) return cachedWorldNames;
+
+        Path worldsFolder = PolarPaper.getPlugin().getDataPath().resolve("worlds");
+        List<String> worldNames = new ArrayList<>();
+        try (Stream<Path> files = Files.list(worldsFolder)) {
+            files.forEach(path -> worldNames.add(path.getFileName().toString().replaceAll("\\.polar$", "")));
+        } catch (IOException _) {
+            // Folder missing or unreadable, so there is nothing to suggest
+        }
+
+        cachedWorldNames = worldNames;
+        cachedWorldNamesAt = now;
+        return worldNames;
     }
 
     public RequiredArgumentBuilder<CommandSourceStack, Identifier> createWorldNameArgument(boolean onlyPolar) {

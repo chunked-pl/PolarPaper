@@ -83,32 +83,33 @@ public class LoadCommand extends PolarCmd {
 
         long before = System.nanoTime();
 
-        Polar.createWorld(source, newWorldName).thenAccept(world -> {
-            boolean successful = world != null;
-            if (successful) {
-                int ms = (int) ((System.nanoTime() - before) / 1_000_000);
-
-                ctx.getSource().getSender().sendMessage(
-                        Component.text()
-                                .append(Component.text("Loaded '", NamedTextColor.AQUA))
-                                .append(Component.text(newWorldName, NamedTextColor.AQUA))
-                                .append(Component.text("' in ", NamedTextColor.AQUA))
-                                .append(Component.text(ms, NamedTextColor.AQUA))
-                                .append(Component.text("ms. ", NamedTextColor.AQUA))
-                                .append(Component.text("Click to teleport", NamedTextColor.WHITE, TextDecoration.UNDERLINED)
-                                        .clickEvent(ClickEvent.runCommand("/polar goto " + newWorldName))
-                                        .hoverEvent(HoverEvent.showText(Component.text()
-                                                .append(Component.text("Click to run ", NamedTextColor.AQUA))
-                                                .append(Component.text("/polar goto " + newWorldName)))))
-                );
-            } else {
+        // whenComplete rather than thenAccept, so an unreadable file is reported instead of being swallowed.
+        // The cause itself is already logged by createWorld.
+        Polar.createWorld(source, newWorldName).whenComplete((world, _) -> {
+            if (world == null) {
                 ctx.getSource().getSender().sendMessage(
                         Component.text()
                                 .append(Component.text("Failed to load world '", NamedTextColor.RED))
                                 .append(Component.text(newWorldName, NamedTextColor.RED))
-                                .append(Component.text("'", NamedTextColor.RED))
+                                .append(Component.text("', please check logs for error", NamedTextColor.RED))
                 );
+                return;
             }
+
+            int ms = (int) ((System.nanoTime() - before) / 1_000_000);
+            ctx.getSource().getSender().sendMessage(
+                    Component.text()
+                            .append(Component.text("Loaded '", NamedTextColor.AQUA))
+                            .append(Component.text(newWorldName, NamedTextColor.AQUA))
+                            .append(Component.text("' in ", NamedTextColor.AQUA))
+                            .append(Component.text(ms, NamedTextColor.AQUA))
+                            .append(Component.text("ms. ", NamedTextColor.AQUA))
+                            .append(Component.text("Click to teleport", NamedTextColor.WHITE, TextDecoration.UNDERLINED)
+                                    .clickEvent(ClickEvent.runCommand("/polar goto " + newWorldName))
+                                    .hoverEvent(HoverEvent.showText(Component.text()
+                                            .append(Component.text("Click to run ", NamedTextColor.AQUA))
+                                            .append(Component.text("/polar goto " + newWorldName)))))
+            );
         });
     }
 

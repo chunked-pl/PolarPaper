@@ -26,8 +26,12 @@ import java.util.stream.Stream;
 
 public final class PolarPaper extends JavaPlugin {
 
+    private static PolarPaper instance;
+
     @Override
     public void onEnable() {
+        instance = this;
+
         FoliaUtil.isFolia(); // Fix classloader error on stop
 
         // Paper commands
@@ -110,8 +114,13 @@ public final class PolarPaper extends JavaPlugin {
         }
     }
 
+    /**
+     * Cached rather than looked up through the plugin manager, as this is called from loops over chunks
+     * and entities.
+     */
     public static PolarPaper getPlugin() {
-        return getPlugin(PolarPaper.class);
+        if (instance == null) instance = getPlugin(PolarPaper.class);
+        return instance;
     }
 
     public static Path getConfigPath() {

@@ -7,7 +7,6 @@ import ca.spottedleaf.moonrise.patches.chunk_system.level.entity.ChunkEntitySlic
 import ca.spottedleaf.moonrise.patches.chunk_system.scheduling.ChunkHolderManager;
 import ca.spottedleaf.moonrise.patches.chunk_system.scheduling.ChunkTaskScheduler;
 import ca.spottedleaf.moonrise.patches.chunk_system.scheduling.NewChunkHolder;
-import ca.spottedleaf.moonrise.patches.starlight.light.SWMRNibbleArray;
 import ca.spottedleaf.moonrise.patches.starlight.light.StarLightEngine;
 import ca.spottedleaf.moonrise.patches.starlight.light.StarLightInterface;
 import com.mojang.logging.LogUtils;
@@ -51,7 +50,6 @@ import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.lang.invoke.VarHandle;
-import java.util.EnumSet;
 import java.util.concurrent.CompletableFuture;
 
 import static live.minehub.polarpaper.core.util.ByteArrayUtil.getVarInt;
@@ -182,23 +180,17 @@ public class PolarStreamLoader {
         CraftWorld craftWorld = (CraftWorld) world;
         ServerLevel serverLevel = craftWorld.getHandle();
 
-        SWMRNibbleArray[] blockNibbles = new SWMRNibbleArray[sectionCount + 2]; // light includes extra top and bottom section
-        SWMRNibbleArray[] skyNibbles = new SWMRNibbleArray[sectionCount + 2];
-        blockNibbles[0] = new SWMRNibbleArray();
-        blockNibbles[sectionCount + 1] = new SWMRNibbleArray();
-        skyNibbles[0] = new SWMRNibbleArray();
-        skyNibbles[sectionCount + 1] = new SWMRNibbleArray();
-        boolean lightPresent = false;
+        ChunkPos chunkPos = new ChunkPos(chunkX, chunkZ);
+        int minSectionY = serverLevel.getMinSectionY();
+
+        ChunkLight chunkLight = new ChunkLight(serverLevel, sectionCount);
         LevelChunkSection[] levelChunkSections = new LevelChunkSection[sectionCount];
         for (int i = 0; i < sectionCount; i++) {
             PolarSection polarSection = PolarReader.readSection(dataConverter, version, dataVersion, bb);
-            if (!lightPresent && (polarSection.skyLightContent() != PolarSection.LightContent.MISSING || polarSection.blockLightContent() != PolarSection.LightContent.MISSING)) lightPresent = true;
 
             try {
-                LevelChunkSection section = polarSection.createLevelChunkSection(serverLevel.registryAccess());
-                levelChunkSections[i] = section;
-                skyNibbles[i + 1] = new SWMRNibbleArray(polarSection.skyLight());
-                blockNibbles[i + 1] = new SWMRNibbleArray(polarSection.blockLight());
+                levelChunkSections[i] = polarSection.createLevelChunkSection(serverLevel, chunkPos, minSectionY + i);
+                chunkLight.addSection(i, polarSection);
             } catch (Exception e) {
                 LOGGER.error("Failed to load chunk at {} {} in {}", chunkX, chunkZ, world.getKey());
                 throw e;
@@ -206,7 +198,7 @@ public class PolarStreamLoader {
 
         }
 
-        NoUnloadLevelChunk newLevelChunk = new NoUnloadLevelChunk(serverLevel, new ChunkPos(chunkX, chunkZ), UpgradeData.EMPTY, new LevelChunkTicks<>(), new LevelChunkTicks<>(), 0L, levelChunkSections, null, null);
+        NoUnloadLevelChunk newLevelChunk = new NoUnloadLevelChunk(serverLevel, chunkPos, UpgradeData.EMPTY, new LevelChunkTicks<>(), new LevelChunkTicks<>(), 0L, levelChunkSections, null, null);
 
         Bukkit.getRegionScheduler().execute(plugin, world, chunkX, chunkZ, newLevelChunk::tryMarkSaved);
 
@@ -216,34 +208,18 @@ public class PolarStreamLoader {
             addBlockEntity(polarBlockEntity, newLevelChunk);
         }
 
-        var heightmaps = PolarReader.readHeightmaps(bb);
+        // Skipped rather than read: insertChunk primes the heightmaps from the blocks it just placed
+        PolarReader.skipHeightmaps(bb);
 
         // Objects
         int userDataLength = getVarInt(bb);
         byte[] userData = new byte[userDataLength];
         bb.readBytes(userData);
 
-        boolean finalLightPresent = lightPresent;
-
         return TaskFutures.runRegion(plugin, world, chunkX, chunkZ, () -> {
             insertChunk(serverLevel, newLevelChunk);
             worldAccess.loadChunkData(world, newLevelChunk, userData);
-
-            if (finalLightPresent) {
-                Boolean[] emptinessMap = StarLightEngine.getEmptySectionsForChunk(newLevelChunk);
-                boolean[] emptinessMapPrim = new boolean[emptinessMap.length];
-                for (int i = 0; i < emptinessMap.length; i++) {
-                    Boolean bool = emptinessMap[i];
-                    emptinessMapPrim[i] = bool != null && bool;
-                }
-                newLevelChunk.starlight$setBlockEmptinessMap(emptinessMapPrim);
-                newLevelChunk.starlight$setSkyEmptinessMap(emptinessMapPrim);
-                newLevelChunk.starlight$setSkyNibbles(skyNibbles);
-                newLevelChunk.starlight$setBlockNibbles(blockNibbles);
-            } else {
-                lightChunk(serverLevel, newLevelChunk);
-            }
-            newLevelChunk.setLightCorrect(true);
+            chunkLight.applyTo(serverLevel, newLevelChunk);
             return null;
         });
     }
@@ -284,9 +260,13 @@ public class PolarStreamLoader {
             }
         }
 
-        CompletableFuture.runAsync(() -> {
-            Heightmap.primeHeightmaps(newLevelChunk, EnumSet.allOf(Heightmap.Types.class));
-        });
+        // Only the heightmaps a full chunk is meant to have, which is what vanilla primes when loading one.
+        // The two worldgen only types are not part of a loaded chunk, and getHeight() primes on demand anyway.
+        CompletableFuture.runAsync(() -> Heightmap.primeHeightmaps(newLevelChunk, ChunkStatus.FULL.heightmapsAfter()))
+                .exceptionally(e -> {
+                    LOGGER.error("Failed to prime heightmaps for chunk at {} {}", chunkX, chunkZ, e);
+                    return null;
+                });
 
         newLevelChunk.setFullStatus(() -> FullChunkStatus.ENTITY_TICKING);
         newLevelChunk.runPostLoad();

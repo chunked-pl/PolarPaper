@@ -28,7 +28,7 @@ public class WorldUserData {
     }
 
     public static byte[] writeSchematicOffset(Vector3i offset) {
-        ByteBuf bb = Unpooled.directBuffer();
+        ByteBuf bb = Unpooled.buffer();
         bb.writeByte(CURRENT_FEATURES_VERSION);
         bb.writeInt(offset.x);
         bb.writeInt(offset.y);

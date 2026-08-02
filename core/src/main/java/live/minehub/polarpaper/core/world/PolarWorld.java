@@ -10,14 +10,15 @@ import org.bukkit.World;
 import org.bukkit.craftbukkit.CraftWorld;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
-import org.joml.Vector2i;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -247,37 +248,38 @@ public class PolarWorld {
      */
     public static CompletableFuture<PolarWorld> convert(World world, PolarWorldAccess polarWorldAccess, BlockSelector blockSelector, Config config, Collection<PolarChunk> includedChunks, boolean loadChunks) {
         // TODO: consider offsets
-        // TODO: chunk holders should probably be eventually released/removed (config option?)
-
-        List<Vector2i> chunkPoses = new ArrayList<>();
-        List<PolarChunk> chunks = new ArrayList<>();
+        // Chunks loaded here do not need releasing: scheduleChunkLoad(addTicket = true) drops its own ticket
+        // once the callback has run, so they unload normally afterwards.
 
         ServerLevel serverLevel = ((CraftWorld) world).getHandle();
         ChunkHolderManager chunkHolderManager = serverLevel.moonrise$getChunkTaskScheduler().chunkHolderManager;
 
+        // The three sources overlap heavily, so they are collected into a set to avoid converting a chunk twice
+        Set<Long> chunkIndexes = new LinkedHashSet<>();
         for (PolarChunk chunk : includedChunks) {
             if (!blockSelector.testChunk(chunk.x(), chunk.z())) continue;
-            chunkPoses.add(new Vector2i(chunk.x(), chunk.z()));
+            chunkIndexes.add(CoordConversion.chunkIndex(chunk.x(), chunk.z()));
         }
-
-        blockSelector.forEachChunk(chunkPoses::add);
+        blockSelector.forEachChunk(chunkPos -> chunkIndexes.add(CoordConversion.chunkIndex(chunkPos.x, chunkPos.y)));
         for (NewChunkHolder chunkHolder : chunkHolderManager.getChunkHolders()) {
             if (!blockSelector.testChunk(chunkHolder.chunkX, chunkHolder.chunkZ)) continue;
-            chunkPoses.add(new Vector2i(chunkHolder.chunkX, chunkHolder.chunkZ));
+            chunkIndexes.add(CoordConversion.chunkIndex(chunkHolder.chunkX, chunkHolder.chunkZ));
         }
 
-        List<CompletableFuture<@Nullable PolarChunk>> futures = new ArrayList<>();
-        for (Vector2i chunkPos : chunkPoses) {
-            int chunkX = chunkPos.x;
-            int chunkZ = chunkPos.y;
+        List<CompletableFuture<@Nullable PolarChunk>> futures = new ArrayList<>(chunkIndexes.size());
+        for (long chunkIndex : chunkIndexes) {
+            int chunkX = CoordConversion.chunkX(chunkIndex);
+            int chunkZ = CoordConversion.chunkZ(chunkIndex);
+            // One unreadable chunk should not fail the whole world, so it is dropped after being reported
             futures.add(PolarChunk.convert(world, chunkX, chunkZ, polarWorldAccess, blockSelector, config.saveLight(), loadChunks)
                     .exceptionally(e -> {
-                        LOGGER.error("Failed to convert world", e);
+                        LOGGER.error("Failed to convert chunk at {} {} in {}", chunkX, chunkZ, world.getKey(), e);
                         return null;
                     }));
         }
 
         return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).thenApply(_ -> {
+            List<PolarChunk> chunks = new ArrayList<>(futures.size());
             for (CompletableFuture<PolarChunk> future : futures) {
                 PolarChunk polarChunk = future.join();
                 if (polarChunk == null) continue;
@@ -292,9 +294,6 @@ public class PolarWorld {
                     config,
                     chunks
             );
-        }).exceptionally(e -> {
-            LOGGER.error("Failed to convert world", e);
-            return null;
         });
     }
 }

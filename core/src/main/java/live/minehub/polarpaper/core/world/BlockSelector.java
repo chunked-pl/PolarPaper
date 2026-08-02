@@ -21,6 +21,11 @@ public interface BlockSelector {
         }
 
         @Override
+        public boolean containsEntireSection(int chunkX, int chunkZ, int sectionY) {
+            return true;
+        }
+
+        @Override
         public void forEachChunk(Consumer<Vector2i> chunkConsumer) {
             // ALL block selector cannot loop through every chunk
         }
@@ -47,6 +52,11 @@ public interface BlockSelector {
                 int dx = x - centerX;
                 int dz = z - centerZ;
                 return dx * dx + dz * dz <= radius * radius;
+            }
+
+            @Override
+            public boolean containsEntireSection(int chunkX, int chunkZ, int sectionY) {
+                return true; // selects whole chunks, never individual blocks
             }
 
             @Override
@@ -91,6 +101,11 @@ public interface BlockSelector {
             }
 
             @Override
+            public boolean containsEntireSection(int chunkX, int chunkZ, int sectionY) {
+                return true; // selects whole chunks, never individual blocks
+            }
+
+            @Override
             public void forEachChunk(Consumer<Vector2i> chunkConsumer) {
                 int minX = (centerX - radius) - 1;
                 int minZ = (centerZ - radius) - 1;
@@ -122,6 +137,15 @@ public interface BlockSelector {
     }
 
     /**
+     * Whether every block of a section is selected, letting callers skip testing its 4096 blocks one by one.
+     * <p>
+     * Only an optimisation: returning false is always correct, it just costs a test per block.
+     */
+    default boolean containsEntireSection(int chunkX, int chunkZ, int sectionY) {
+        return false;
+    }
+
+    /**
      * Loop through every chunk that this block selector contains. Does not return anything with ALL block selector.
      * Used to add additional chunks to consider while saving the world.
      */
@@ -147,6 +171,16 @@ public interface BlockSelector {
             int maxZ = minZ + 16;
             return min.x <= maxX && max.x >= minX &&
                     min.z <= maxZ && max.z >= minZ;
+        }
+
+        @Override
+        public boolean containsEntireSection(int chunkX, int chunkZ, int sectionY) {
+            int minX = chunkX * 16;
+            int minY = sectionY * 16;
+            int minZ = chunkZ * 16;
+            return min.x <= minX && max.x >= minX + 15 &&
+                    min.y <= minY && max.y >= minY + 15 &&
+                    min.z <= minZ && max.z >= minZ + 15;
         }
 
         @Override

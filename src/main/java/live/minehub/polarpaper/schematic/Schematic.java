@@ -4,6 +4,7 @@ import io.netty.buffer.Unpooled;
 import live.minehub.polarpaper.PolarPaper;
 import live.minehub.polarpaper.core.userdata.EntityUtil;
 import live.minehub.polarpaper.core.userdata.WorldUserData;
+import live.minehub.polarpaper.core.util.BlockStateCodec;
 import live.minehub.polarpaper.core.util.CoordConversion;
 import live.minehub.polarpaper.core.util.PaletteUtil;
 import live.minehub.polarpaper.core.world.PolarChunk;
@@ -11,22 +12,16 @@ import live.minehub.polarpaper.core.world.PolarEntity;
 import live.minehub.polarpaper.core.world.PolarSection;
 import live.minehub.polarpaper.core.world.PolarWorld;
 import live.minehub.polarpaper.util.BlockUtil;
-import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.NamespacedKey;
-import org.bukkit.craftbukkit.block.data.CraftBlockData;
 import org.joml.Vector2i;
 import org.joml.Vector3i;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.util.*;
 
 public class Schematic {
-
-    private static final Logger LOGGER = LoggerFactory.getLogger(Schematic.class);
 
     public static final NamespacedKey POS_1_KEY = new NamespacedKey("polarpaper", "pos1");
     public static final NamespacedKey POS_2_KEY = new NamespacedKey("polarpaper", "pos2");
@@ -126,50 +121,31 @@ public class Schematic {
             PaletteUtil.unpack(blockData, blockDataLongs, blockDataBits);
         }
 
+        // Rotating the palette once, rather than every block, both avoids 4096 rotations per section and keeps
+        // a uniform section from having its single state rotated again for each block it is written to
         String[] rawBlockPalette = polarSection.blockPalette();
         BlockState[] materialPalette = new BlockState[rawBlockPalette.length];
         for (int i = 0; i < rawBlockPalette.length; i++) {
-            try {
-                materialPalette[i] = ((CraftBlockData) Bukkit.getServer().createBlockData(rawBlockPalette[i])).getState();
-            } catch (IllegalArgumentException _) {
-                LOGGER.warn("Failed to parse block state: " + rawBlockPalette[i]);
-                materialPalette[i] = Blocks.AIR.defaultBlockState();
-            }
+            materialPalette[i] = BlockStateCodec.fromPaletteString(rawBlockPalette[i]).rotate(rotation.getMcRot());
         }
 
-        if (rawBlockPalette.length <= 1) {
-            BlockState blockState = materialPalette[0];
-            if (blockState.isAir() && (ignoreAir == IgnoreAir.ALL || ignoreAir == IgnoreAir.EMPTY_SECTION)) return;
+        boolean uniformSection = rawBlockPalette.length <= 1;
+        if (uniformSection && materialPalette[0].isAir() && ignoreAir != IgnoreAir.NONE) return;
 
-            for (int y = 0; y < 16; y++) {
-                for (int z = 0; z < 16; z++) {
-                    for (int x = 0; x < 16; x++) {
-                        Vector3i blockPos = new Vector3i(x, y, z);
-                        blockPos.add(offset);
-                        blockState = blockState.rotate(rotation.getMcRot());
-                        BlockUtil.rotatePos(blockPos, rotation);
-                        blockPos.add(pasteOffset);
+        Vector3i blockPos = new Vector3i();
+        int blockIndex = 0;
+        for (int y = 0; y < 16; y++) {
+            for (int z = 0; z < 16; z++) {
+                for (int x = 0; x < 16; x++) {
+                    BlockState blockState = materialPalette[uniformSection ? 0 : blockData[blockIndex]];
+                    blockIndex++;
+                    if (ignoreAir == IgnoreAir.ALL && blockState.isAir()) continue;
 
-                        setter.setBlock(blockPos.x, blockPos.y, blockPos.z, blockState);
-                    }
-                }
-            }
-        } else {
-            int blockIndex = 0;
-            for (int y = 0; y < 16; y++) {
-                for (int z = 0; z < 16; z++) {
-                    for (int x = 0; x < 16; x++) {
-                        BlockState blockState = materialPalette[blockData[blockIndex++]];
-                        if (ignoreAir == IgnoreAir.ALL && blockState.isAir()) continue;
+                    blockPos.set(x, y, z).add(offset);
+                    BlockUtil.rotatePos(blockPos, rotation);
+                    blockPos.add(pasteOffset);
 
-                        Vector3i blockPos = new Vector3i(x, y, z);
-                        blockPos.add(offset);
-                        blockState = blockState.rotate(rotation.getMcRot());
-                        BlockUtil.rotatePos(blockPos, rotation);
-                        blockPos.add(pasteOffset);
-
-                        setter.setBlock(blockPos.x, blockPos.y, blockPos.z, blockState);
-                    }
+                    setter.setBlock(blockPos.x, blockPos.y, blockPos.z, blockState);
                 }
             }
         }

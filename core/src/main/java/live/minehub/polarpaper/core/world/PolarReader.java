@@ -7,7 +7,6 @@ import io.netty.buffer.Unpooled;
 import live.minehub.polarpaper.core.source.PolarSource;
 import live.minehub.polarpaper.core.userdata.EntityUtil;
 import live.minehub.polarpaper.core.util.ByteArrayUtil;
-import live.minehub.polarpaper.core.util.LightUtil;
 import live.minehub.polarpaper.core.util.PaletteUtil;
 import net.kyori.adventure.key.Key;
 import net.minecraft.nbt.*;
@@ -134,7 +133,7 @@ public class PolarReader {
         bb.readBytes(userData);
 
         if (entities != null) {
-            ByteBuf newData = Unpooled.directBuffer();
+            ByteBuf newData = Unpooled.buffer();
             newData.writeByte((byte) 1);
             EntityUtil.writeEntities(entities, newData);
 
@@ -148,6 +147,22 @@ public class PolarReader {
                 heightmaps,
                 userData
         );
+    }
+
+    /**
+     * Consumes the heightmap section without unpacking it, for readers that rebuild the heightmaps anyway.
+     * <p>
+     * Unpacking allocates an int per column of every stored heightmap, which is pure waste when the result
+     * is thrown away.
+     */
+    protected static void skipHeightmaps(@NotNull ByteBuf bb) {
+        int heightmapMask = bb.readInt();
+        for (int i = 0; i < PolarChunk.MAX_HEIGHTMAPS; i++) {
+            if ((heightmapMask & (1 << i)) == 0) continue;
+
+            int packedLength = getVarInt(bb);
+            bb.skipBytes(packedLength * Long.BYTES);
+        }
     }
 
     protected static int @NotNull [][] readHeightmaps(ByteBuf bb) {
@@ -199,17 +214,11 @@ public class PolarReader {
             biomeData = getLongArray(bb);
         }
 
-        byte[] blockLight;
-        byte[] skyLight;
-        PolarSection.LightContent blockLightContent = version >= PolarWorld.VERSION_IMPROVED_LIGHT
-                ? PolarSection.LightContent.VALUES[bb.readByte()]
-                : ((bb.readByte() == 1) ? PolarSection.LightContent.PRESENT : PolarSection.LightContent.MISSING);
-        blockLight = LightUtil.getLightArray(blockLightContent, blockLightContent == PolarSection.LightContent.PRESENT ? getLightData(bb) : null);
-        PolarSection.LightContent skyLightContent = version >= PolarWorld.VERSION_IMPROVED_LIGHT
-                ? PolarSection.LightContent.VALUES[bb.readByte()]
-                : (bb.readByte() == 1 ? PolarSection.LightContent.PRESENT : PolarSection.LightContent.MISSING);
-        skyLight = LightUtil.getLightArray(skyLightContent, skyLightContent == PolarSection.LightContent.PRESENT ? getLightData(bb) : null);
-
+        // Uniform light is fully described by its LightContent, so only PRESENT sections carry an array around
+        PolarSection.LightContent blockLightContent = readLightContent(version, bb);
+        byte[] blockLight = blockLightContent == PolarSection.LightContent.PRESENT ? getLightData(bb) : null;
+        PolarSection.LightContent skyLightContent = readLightContent(version, bb);
+        byte[] skyLight = skyLightContent == PolarSection.LightContent.PRESENT ? getLightData(bb) : null;
 
         return new PolarSection(
                 blockPalette, blockData,
@@ -217,6 +226,11 @@ public class PolarReader {
                 blockLightContent, blockLight,
                 skyLightContent, skyLight
         );
+    }
+
+    private static PolarSection.@NotNull LightContent readLightContent(short version, @NotNull ByteBuf bb) {
+        if (version >= PolarWorld.VERSION_IMPROVED_LIGHT) return PolarSection.LightContent.VALUES[bb.readByte()];
+        return bb.readByte() == 1 ? PolarSection.LightContent.PRESENT : PolarSection.LightContent.MISSING;
     }
 
     private static void fixSignNBT(CompoundTag nbt) {

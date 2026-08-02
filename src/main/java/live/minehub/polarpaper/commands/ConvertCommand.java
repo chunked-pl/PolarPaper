@@ -112,9 +112,7 @@ public class ConvertCommand extends PolarCmd {
             try {
                 Polar.getDefaultFolderSource(newWorldName).saveBytes(polarBytes);
             } catch (Exception e) {
-                sender.sendMessage(Component.text("Failed to save '" + worldKey.getKey() + "'"));
-                LOGGER.error("Failed to save: " + worldKey.getKey(), e);
-                return;
+                throw new RuntimeException("Failed to write " + newWorldName + ".polar", e);
             }
 
             int ms = (int) ((System.nanoTime() - before) / 1_000_000);
@@ -133,6 +131,11 @@ public class ConvertCommand extends PolarCmd {
                                             .append(Component.text("Click to run ", NamedTextColor.AQUA))
                                             .append(Component.text("/polar load " + newWorldKey.getKey())))))
             );
+        }).exceptionally(e -> {
+            String errorMsg = String.format("Failed to convert '%s', please check logs for error", worldKey.getKey());
+            LOGGER.error(errorMsg, e);
+            sender.sendMessage(Component.text(errorMsg, NamedTextColor.RED));
+            return null;
         });
 
         return Command.SINGLE_SUCCESS;

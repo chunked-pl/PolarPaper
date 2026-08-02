@@ -10,6 +10,7 @@ import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.TextComponent;
 import net.kyori.adventure.text.format.NamedTextColor;
 import org.bukkit.World;
+import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.joml.Vector3i;
 
@@ -50,6 +51,15 @@ public class PolarStreamingGenerator extends PolarGenerator {
         this.dataVersion = dataVersion;
     }
 
+    /**
+     * The polar version and data version the world was streamed from. Blank worlds and worlds created from an
+     * in memory PolarWorld were never read from polar data, so they have neither.
+     */
+    private @NotNull String versionString() {
+        if (version == null) return "none (world was not read from polar data)";
+        return version + " (" + dataVersion + ")";
+    }
+
     @Override
     public Component getInfoComponent(World world) {
         byte[] userData = getUserData();
@@ -61,10 +71,7 @@ public class PolarStreamingGenerator extends PolarGenerator {
                 .append(Component.text(":", NamedTextColor.AQUA))
                 .appendNewline()
                 .append(Component.text(" Version: ", NamedTextColor.AQUA))
-                .append(Component.text(getVersion(), NamedTextColor.AQUA))
-                .append(Component.text(" (", NamedTextColor.AQUA))
-                .append(Component.text(getDataVersion(), NamedTextColor.AQUA))
-                .append(Component.text(")", NamedTextColor.AQUA))
+                .append(Component.text(versionString(), NamedTextColor.AQUA))
                 .appendNewline()
                 .append(Component.text(" Compression: ", NamedTextColor.AQUA))
                 .append(Component.text(getConfig().compression().name(), NamedTextColor.AQUA))

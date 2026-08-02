@@ -81,7 +81,7 @@ public class SaveCommand extends PolarCmd {
             String errorMsg = String.format("Failed to save '%s'", bukkitWorld.getKey().getKey());
             LOGGER.error(errorMsg, e);
             sender.sendMessage(Component.text(errorMsg, NamedTextColor.RED));
-            return null;
+            return false;
         });
     }
 

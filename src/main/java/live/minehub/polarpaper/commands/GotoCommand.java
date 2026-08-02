@@ -23,11 +23,12 @@ import org.bukkit.entity.Player;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 public class GotoCommand extends PolarCmd {
 
     public GotoCommand() {
-        super("goto", "Teleport to a world");
+        super("goto", "Teleport to a world, polar or not", List.of("tp"));
     }
 
     private static int run(CommandContext<CommandSourceStack> ctx) {
@@ -69,13 +70,11 @@ public class GotoCommand extends PolarCmd {
 
         Bukkit.getGlobalRegionScheduler().execute(PolarPaper.getPlugin(), () -> {
             PolarGenerator polarGenerator = PolarGenerator.fromWorld(bukkitWorld);
-            Location spawnPos;
-            if (polarGenerator != null) {
-                Config config = Config.readFromConfig(PolarPaper.getPlugin().getConfig(), bukkitWorld);
-                spawnPos = config.spawn();
-            } else {
-                spawnPos = bukkitWorld.getSpawnLocation();
-            }
+            // Non polar worlds have no polar config, so fall back to the world's own spawn.
+            // Copied either way, so teleporting cannot move the spawn stored in the config.
+            Location spawnPos = polarGenerator == null
+                    ? bukkitWorld.getSpawnLocation()
+                    : Config.readFromConfig(PolarPaper.getPlugin().getConfig(), bukkitWorld).spawn().clone();
 
             sender.sendMessage(
                     Component.text()

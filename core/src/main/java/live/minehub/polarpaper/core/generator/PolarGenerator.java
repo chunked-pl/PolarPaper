@@ -50,9 +50,10 @@ public abstract class PolarGenerator extends ChunkGenerator {
 
     @Override
     public @Nullable Location getFixedSpawnLocation(@NotNull World world, @NotNull Random random) {
-        Location loc = getConfig().spawn();
-        loc.setWorld(world);
-        return loc;
+        // Copied so that callers cannot move the spawn stored in the config by mutating what they are given
+        Location spawn = getConfig().spawn().clone();
+        spawn.setWorld(world);
+        return spawn;
     }
 
     public static @Nullable PolarGenerator fromWorld(World world) {

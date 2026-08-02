@@ -153,27 +153,30 @@ public class Polar {
             worldBytes = source == null ? null : source.readBytes();
         } catch (Exception e) {
             LOGGER.error("Failed to load world " + worldName, e);
-            return null;
+            return CompletableFuture.failedFuture(e);
         }
 
         return createWorld(new PolarStreamingGenerator(config, source, worldAccess), worldName).thenComposeAsync(world -> {
             if (world == null) return CompletableFuture.completedFuture(null);
-            if (worldBytes != null && worldBytes.length > 0) {
-                return PolarStreamLoader.stream(worldBytes, world, worldAccess)
-                        .handle((_, ex) -> {
-                            if (ex != null) {
-                                LOGGER.error("Failed to load world " + worldName, ex);
-                                return null;
-                            }
 
-                            return world;
-                        });
+            // stream() validates the header eagerly, so it can fail before it ever returns a future
+            CompletableFuture<Void> streamed;
+            try {
+                streamed = worldBytes == null || worldBytes.length == 0
+                        ? CompletableFuture.completedFuture(null)
+                        : PolarStreamLoader.stream(worldBytes, world, worldAccess);
+            } catch (Throwable t) {
+                streamed = CompletableFuture.failedFuture(t);
             }
-            return CompletableFuture.completedFuture(world);
-        }).whenComplete((result, ex) -> {
-            if (ex != null || result == null) return;
-            setLoading(result.getKey(), false);
-            startAutoSaveTask(result, config);
+
+            // The world exists from here on, so it must stop counting as loading even if streaming failed
+            return streamed.handle((_, ex) -> {
+                finishLoading(world, config);
+                if (ex == null) return world;
+
+                LOGGER.error("Failed to load world " + worldName, ex);
+                return null;
+            });
         });
     }
 
@@ -212,12 +215,17 @@ public class Polar {
 
             return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).thenApply(_ -> world);
         }).whenComplete((world, ex) -> {
-            if (world != null) {
-                setLoading(world.getKey(), false);
-                startAutoSaveTask(world, config);
-            }
+            if (world != null) finishLoading(world, config);
             if (ex != null) LOGGER.error("Failed to load world " + worldName, ex);
         });
+    }
+
+    /**
+     * Marks a newly created world as ready to be saved and starts autosaving it.
+     */
+    private static void finishLoading(@NotNull World world, @NotNull Config config) {
+        setLoading(world.getKey(), false);
+        startAutoSaveTask(world, config);
     }
 
     /**
@@ -253,6 +261,8 @@ public class Polar {
         return VersionUtil.createNoSaveLevel(worldCreator, config.spawn(), config.difficulty(), config.gamerules(), config.time())
                 .whenComplete((world, ex) -> {
                     if (ex != null || world == null) {
+                        // createNoSaveLevel marks the world as loading before it starts, so clear that again
+                        setLoading(worldKey, false);
                         if (ex == null) {
                             LOGGER.error("An error occurred loading polar world '" + worldKey.getKey() + "', skipping.");
                         } else {
@@ -268,7 +278,9 @@ public class Polar {
     }
 
     public static void stopAutoSaveTask(NamespacedKey worldKey) {
-        ScheduledTask prevTask = AUTOSAVE_TASK_MAP.get(worldKey);
+        // Removed as well as cancelled: the task holds on to the world, which would otherwise stay in memory
+        // for as long as the server runs after being unloaded
+        ScheduledTask prevTask = AUTOSAVE_TASK_MAP.remove(worldKey);
         if (prevTask != null) prevTask.cancel();
     }
 

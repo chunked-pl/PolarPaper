@@ -33,9 +33,17 @@ public class VersionUtil {
         return new EntitiesWorldAccess(PolarPaper.getPlugin(), getEntitySerializer());
     }
 
+    /**
+     * The serializer is stateless and looking it up costs an API version check, so the single instance is
+     * shared. It is called once per entity when pasting a world.
+     */
     public static EntitySerializer getEntitySerializer() {
-        String version = Versioning.getCurrentApiVersion();
-        return switch (version) {
+        return EntitySerializerHolder.INSTANCE;
+    }
+
+    /** Initialised on first use, so the API version is only read once the server is up. */
+    private static final class EntitySerializerHolder {
+        private static final EntitySerializer INSTANCE = switch (Versioning.getCurrentApiVersion()) {
             case "1.21.11", "26.1.2" -> new live.minehub.polarpaper.paper_26_1.EntitySerializerImpl();
             default -> new live.minehub.polarpaper.paper_latest.EntitySerializerImpl();
         };

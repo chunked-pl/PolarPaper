@@ -18,48 +18,56 @@ public class PolarWriter {
 
     private static final int CHUNK_SECTION_SIZE = 16;
 
+    /**
+     * Rough guess used to size the content buffer, so writing a large world does not spend most of its time
+     * growing that buffer by repeatedly reallocating and copying it.
+     */
+    private static final int ESTIMATED_BYTES_PER_CHUNK = 4096;
+    private static final int MAX_ESTIMATED_CONTENT_BYTES = 64 * 1024 * 1024;
+
+    /** Magic number, version, data version, compression type and uncompressed length. */
+    private static final int HEADER_BYTES = 4 + 2 + 5 + 1 + 5;
+
     public static byte[] write(@NotNull PolarWorld world) {
-        return write(world, live.minehub.polarpaper.core.world.PolarDataConverter.DEFAULT);
+        return write(world, PolarDataConverter.DEFAULT);
     }
 
-    public static byte[] write(@NotNull PolarWorld world, @NotNull live.minehub.polarpaper.core.world.PolarDataConverter dataConverter) {
-        ByteBuf bb = Unpooled.directBuffer();
+    public static byte[] write(@NotNull PolarWorld world, @NotNull PolarDataConverter dataConverter) {
+        List<PolarChunk> nonEmptyChunks = world.nonEmptyChunks();
 
-        bb.writeByte(world.minSection());
-        bb.writeByte(world.maxSection());
-        writeVarInt(world.userData().length, bb);
-        bb.writeBytes(world.userData());
+        ByteBuf content = Unpooled.buffer(estimateContentBytes(nonEmptyChunks.size()));
+        content.writeByte(world.minSection());
+        content.writeByte(world.maxSection());
+        writeVarInt(world.userData().length, content);
+        content.writeBytes(world.userData());
 
-        List<live.minehub.polarpaper.core.world.PolarChunk> nonEmptyChunks = world.nonEmptyChunks();
-        writeVarInt(nonEmptyChunks.size(), bb);
-        for (live.minehub.polarpaper.core.world.PolarChunk chunk : nonEmptyChunks) {
-            writeChunk(bb, chunk, world.maxSection() - world.minSection() + 1);
+        writeVarInt(nonEmptyChunks.size(), content);
+        for (PolarChunk chunk : nonEmptyChunks) {
+            writeChunk(content, chunk, world.maxSection() - world.minSection() + 1);
         }
 
-        byte[] contentBytes = ByteArrayUtil.outputArray(bb);
+        byte[] contentBytes = ByteArrayUtil.outputArray(content);
+        byte[] payload = switch (world.compression()) {
+            case NONE -> contentBytes;
+            case ZSTD -> Zstd.compress(contentBytes, world.compressionLevel());
+        };
 
+        ByteBuf out = Unpooled.buffer(HEADER_BYTES + payload.length);
+        out.writeInt(PolarWorld.MAGIC_NUMBER);
+        out.writeShort(PolarWorld.LATEST_VERSION);
+        writeVarInt(dataConverter.dataVersion(), out);
+        out.writeByte(world.compression().ordinal());
+        writeVarInt(contentBytes.length, out); // uncompressed length
+        out.writeBytes(payload);
 
-        // Create final buffer
-        ByteBuf finalBB = Unpooled.directBuffer();
-        finalBB.writeInt(PolarWorld.MAGIC_NUMBER);
-        finalBB.writeShort(PolarWorld.LATEST_VERSION);
-        writeVarInt(dataConverter.dataVersion(), finalBB);
-        finalBB.writeByte(world.compression().ordinal());
-        switch (world.compression()) {
-            case NONE -> {
-                writeVarInt(contentBytes.length, finalBB);
-                finalBB.writeBytes(contentBytes);
-            }
-            case ZSTD -> {
-                writeVarInt(contentBytes.length, finalBB);
-                finalBB.writeBytes(Zstd.compress(contentBytes, world.compressionLevel()));
-            }
-        }
-
-        return ByteArrayUtil.outputArray(finalBB);
+        return ByteArrayUtil.outputArray(out);
     }
 
-    private static void writeChunk(@NotNull ByteBuf bb, @NotNull live.minehub.polarpaper.core.world.PolarChunk chunk, int sectionCount) {
+    private static int estimateContentBytes(int chunkCount) {
+        return (int) Math.min((long) chunkCount * ESTIMATED_BYTES_PER_CHUNK, MAX_ESTIMATED_CONTENT_BYTES);
+    }
+
+    private static void writeChunk(@NotNull ByteBuf bb, @NotNull PolarChunk chunk, int sectionCount) {
         writeVarInt(chunk.x(), bb);
         writeVarInt(chunk.z(), bb);
 
@@ -76,14 +84,14 @@ public class PolarWriter {
 
         {
             int heightmapBits = 0;
-            for (int i = 0; i < live.minehub.polarpaper.core.world.PolarChunk.MAX_HEIGHTMAPS; i++) {
+            for (int i = 0; i < PolarChunk.MAX_HEIGHTMAPS; i++) {
                 if (chunk.heightmap(i) != null)
                     heightmapBits |= 1 << i;
             }
             bb.writeInt(heightmapBits);
 
             int bitsPerEntry = PaletteUtil.bitsToRepresent(sectionCount * CHUNK_SECTION_SIZE);
-            for (int i = 0; i < live.minehub.polarpaper.core.world.PolarChunk.MAX_HEIGHTMAPS; i++) {
+            for (int i = 0; i < PolarChunk.MAX_HEIGHTMAPS; i++) {
                 var heightmap = chunk.heightmap(i);
                 if (heightmap == null) continue;
                 if (heightmap.length == 0) writeLongArray(new long[0], bb);
@@ -94,7 +102,7 @@ public class PolarWriter {
         writeByteArray(chunk.userData(), bb);
     }
 
-    private static void writeSection(@NotNull ByteBuf bb, @NotNull live.minehub.polarpaper.core.world.PolarSection section) {
+    private static void writeSection(@NotNull ByteBuf bb, @NotNull PolarSection section) {
         boolean empty = section.isEmpty();
         bb.writeByte(empty ? 1 : 0);
         if (empty) return;
@@ -117,10 +125,10 @@ public class PolarWriter {
 
         // Light
         bb.writeByte((byte) section.blockLightContent().ordinal());
-        if (section.blockLightContent() == live.minehub.polarpaper.core.world.PolarSection.LightContent.PRESENT)
+        if (section.blockLightContent() == PolarSection.LightContent.PRESENT)
             bb.writeBytes(section.blockLight());
         bb.writeByte((byte) section.skyLightContent().ordinal());
-        if (section.skyLightContent() == live.minehub.polarpaper.core.world.PolarSection.LightContent.PRESENT)
+        if (section.skyLightContent() == PolarSection.LightContent.PRESENT)
             bb.writeBytes(section.skyLight());
     }
 

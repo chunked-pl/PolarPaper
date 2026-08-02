@@ -15,6 +15,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 public class CommandManager {
@@ -46,6 +47,7 @@ public class CommandManager {
         register(new SetCenterCommand());
         register(new SetSpawnCommand());
         register(new UnloadCommand());
+        register(new UsageCommand());
         register(new VersionCommand());
 
         register(new RelightCommand());
@@ -79,13 +81,19 @@ public class CommandManager {
     }
 
     private void register(PolarCmd polarCmd) {
-        boolean contains = registeredCommands.containsKey(polarCmd.getName());
-        if (contains) {
-            LOGGER.warn("Already registered command with name: {}", polarCmd.getName());
+        List<String> literals = polarCmd.getLiterals();
+        for (String literal : literals) {
+            if (!registeredCommands.containsKey(literal)) continue;
+
+            LOGGER.warn("Already registered command with name: {}", literal);
             return;
         }
-        registeredCommands.put(polarCmd.getName(), polarCmd);
 
+        // Only claimed once the whole subcommand is known to be free, so a clashing alias cannot
+        // leave the command half registered
+        for (String literal : literals) {
+            registeredCommands.put(literal, polarCmd);
+        }
         polarCmd.registerCommand(rootCmd);
     }
 

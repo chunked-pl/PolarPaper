@@ -56,20 +56,11 @@ public class EntitySerializerImpl implements EntitySerializer {
 
             boolean successful;
             try {
-                successful = ((CraftEntity) entity).getHandle().saveAsPassenger(tagValueOutput, true, false, false);
+                successful = nmsEntity.saveAsPassenger(tagValueOutput, true, false, false);
             } catch (Exception e) {
                 // saveAsPassenger sometimes calls events (e.g. VillagerAcquireTradeEvent), causing errors when called async so try again synchronously
-                CompletableFuture<Boolean> successfulFuture = new CompletableFuture<>();
-
-                entity.getScheduler().run(plugin, (t) -> {
-                    try {
-                        boolean successful2 = ((CraftEntity) entity).getHandle().saveAsPassenger(tagValueOutput, true, false, false);
-                        successfulFuture.complete(successful2);
-                    } catch (Exception e2) {
-                        LOGGER.error("Failed to serialize entity", e2);
-                    }
-                }, null);
-                successful = successfulFuture.join();
+                successful = EntitySerializer.saveOnEntityThread(entity, plugin,
+                        () -> nmsEntity.saveAsPassenger(tagValueOutput, true, false, false));
             }
 
             CompoundTag compound = tagValueOutput.buildResult();
