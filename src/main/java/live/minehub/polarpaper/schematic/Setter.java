@@ -85,7 +85,7 @@ public interface Setter {
 
             CraftEntity entity = nmsEntity.getBukkitEntity();
 
-            Bukkit.getRegionScheduler().run(PolarPaper.getPlugin(), spawnLocation, _ -> {
+            Bukkit.getScheduler().runTask(PolarPaper.getPlugin(), () -> {
                 PolarEntitySpawnEvent event = new PolarEntitySpawnEvent(polarEntity, entity, spawnLocation, true);
                 event.callEvent();
                 if (!event.isCancelled()) {
@@ -100,11 +100,9 @@ public interface Setter {
 
             // relight chunks and resend blocks to client
             serverLevel.getChunkSource().getLightEngine().starlight$serverRelightChunks(vecsToChunkPos(chunksToRefresh), _ -> {}, _ -> {});
-            for (Vector2i c : chunksToRefresh) {
-                Bukkit.getRegionScheduler().execute(PolarPaper.getPlugin(), world, c.x(), c.y(), () -> {
-                    world.refreshChunk(c.x(), c.y());
-                });
-            }
+            Bukkit.getScheduler().runTask(PolarPaper.getPlugin(), () -> {
+                for (Vector2i c : chunksToRefresh) world.refreshChunk(c.x(), c.y());
+            });
         }
 
         private List<ChunkPos> vecsToChunkPos(Set<Vector2i> vecs) {

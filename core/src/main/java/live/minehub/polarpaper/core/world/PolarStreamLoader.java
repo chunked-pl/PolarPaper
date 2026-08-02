@@ -25,6 +25,7 @@ import net.minecraft.server.level.ThreadedLevelLightEngine;
 import net.minecraft.util.ProblemReporter;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.block.EntityBlock;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.ChunkAccess;
@@ -42,6 +43,7 @@ import org.bukkit.craftbukkit.CraftWorld;
 import org.bukkit.plugin.Plugin;
 import org.jetbrains.annotations.Contract;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -115,10 +117,20 @@ public class PolarStreamLoader {
     }
 
     public static CompletableFuture<Void> stream(byte @NotNull [] data, World world, @NotNull PolarWorldAccess worldAccess) {
-        return stream(data, world, PolarDataConverter.DEFAULT, worldAccess);
+        return stream(data, world, PolarDataConverter.DEFAULT, worldAccess, BlockSelector.ALL);
     }
 
     public static CompletableFuture<Void> stream(byte @NotNull [] data, World world, @NotNull PolarDataConverter dataConverter, @NotNull PolarWorldAccess worldAccess) {
+        return stream(data, world, dataConverter, worldAccess, BlockSelector.ALL);
+    }
+
+    public static CompletableFuture<Void> stream(byte @NotNull [] data, World world, @NotNull PolarWorldAccess worldAccess,
+                                                  @NotNull BlockSelector blockSelector) {
+        return stream(data, world, PolarDataConverter.DEFAULT, worldAccess, blockSelector);
+    }
+
+    public static CompletableFuture<Void> stream(byte @NotNull [] data, World world, @NotNull PolarDataConverter dataConverter,
+                                                  @NotNull PolarWorldAccess worldAccess, @NotNull BlockSelector blockSelector) {
         ByteBuf bb = Unpooled.wrappedBuffer(data);
 
         int magic = bb.readInt();
@@ -162,13 +174,15 @@ public class PolarStreamLoader {
         int chunkCount = getVarInt(uncompressed);
         validateChunkCount(chunkCount, uncompressed, maxSection - minSection + 1);
 
-        List<CompletableFuture<Void>> futures = new ArrayList<>(chunkCount);
+        List<CompletableFuture<Void>> futures = new ArrayList<>(Math.min(chunkCount, 4096));
         Throwable readFailure = null;
         for (int i = 0; i < chunkCount; i++) {
             try {
-                CompletableFuture<Void> future = readChunk(worldAccess.getPlugin(), world, dataConverter, worldAccess, version, dataVersion, uncompressed, maxSection - minSection + 1);
+                CompletableFuture<Void> future = readChunk(worldAccess.getPlugin(), world, dataConverter, worldAccess,
+                        blockSelector, version, dataVersion, uncompressed, maxSection - minSection + 1);
+                if (future == null) continue;
                 if (future.isCompletedExceptionally()) throw future.exceptionNow();
-                futures.add(future);
+                if (!future.isDone()) futures.add(future);
             } catch (Throwable e) {
                 readFailure = e;
                 break;
@@ -178,7 +192,7 @@ public class PolarStreamLoader {
         CompletableFuture<Void> scheduledChunks = CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new));
         if (readFailure == null) return scheduledChunks;
 
-        // Some chunks may already be queued on region threads. Do not report failure (and let the caller unload
+        // Some chunks may already be queued on the main thread. Do not report failure (and let the caller unload
         // the world) until those tasks have stopped touching it.
         Throwable finalReadFailure = readFailure;
         return scheduledChunks.handle((_, scheduledFailure) -> {
@@ -189,9 +203,17 @@ public class PolarStreamLoader {
         });
     }
 
-    private static CompletableFuture<Void> readChunk(Plugin plugin, World world, @NotNull PolarDataConverter dataConverter, @NotNull PolarWorldAccess worldAccess, short version, int dataVersion, @NotNull ByteBuf bb, int sectionCount) {
+    private static @Nullable CompletableFuture<Void> readChunk(
+            Plugin plugin, World world, @NotNull PolarDataConverter dataConverter,
+            @NotNull PolarWorldAccess worldAccess, @NotNull BlockSelector blockSelector,
+            short version, int dataVersion, @NotNull ByteBuf bb, int sectionCount) {
         var chunkX = getVarInt(bb);
         var chunkZ = getVarInt(bb);
+
+        if (!blockSelector.testChunk(chunkX, chunkZ)) {
+            PolarReader.skipChunkBody(version, bb, sectionCount);
+            return null;
+        }
 
         CraftWorld craftWorld = (CraftWorld) world;
         ServerLevel serverLevel = craftWorld.getHandle();
@@ -200,13 +222,21 @@ public class PolarStreamLoader {
         int minSectionY = serverLevel.getMinSectionY();
 
         ChunkLight chunkLight = new ChunkLight(serverLevel, sectionCount);
+        PolarSection[] polarSections = new PolarSection[sectionCount];
         LevelChunkSection[] levelChunkSections = new LevelChunkSection[sectionCount];
+        boolean preserveStoredLight = true;
         for (int i = 0; i < sectionCount; i++) {
             PolarSection polarSection = PolarReader.readSection(dataConverter, version, dataVersion, bb);
+            polarSections[i] = polarSection;
+            int sectionY = minSectionY + i;
 
             try {
-                levelChunkSections[i] = polarSection.createLevelChunkSection(serverLevel, chunkPos, minSectionY + i);
-                chunkLight.addSection(i, polarSection);
+                LevelChunkSection levelChunkSection = polarSection.createLevelChunkSection(serverLevel, chunkPos, sectionY);
+                levelChunkSections[i] = levelChunkSection;
+                if (!blockSelector.containsEntireSection(chunkX, chunkZ, sectionY)) {
+                    preserveStoredLight = false;
+                    maskOutsideSelection(levelChunkSection, blockSelector, chunkX, chunkZ, sectionY);
+                }
             } catch (Exception e) {
                 LOGGER.error("Failed to load chunk at {} {} in {}", chunkX, chunkZ, world.getKey());
                 throw e;
@@ -214,13 +244,16 @@ public class PolarStreamLoader {
 
         }
 
-        NoUnloadLevelChunk newLevelChunk = new NoUnloadLevelChunk(serverLevel, chunkPos, UpgradeData.EMPTY, new LevelChunkTicks<>(), new LevelChunkTicks<>(), 0L, levelChunkSections, null, null);
+        if (preserveStoredLight) {
+            for (int i = 0; i < sectionCount; i++) chunkLight.addSection(i, polarSections[i]);
+        }
 
-        Bukkit.getRegionScheduler().execute(plugin, world, chunkX, chunkZ, newLevelChunk::tryMarkSaved);
+        NoUnloadLevelChunk newLevelChunk = new NoUnloadLevelChunk(serverLevel, chunkPos, UpgradeData.EMPTY, new LevelChunkTicks<>(), new LevelChunkTicks<>(), 0L, levelChunkSections, null, null);
 
         int blockEntityCount = getVarInt(bb);
         for (int i = 0; i < blockEntityCount; i++) {
             PolarChunk.BlockEntity polarBlockEntity = PolarReader.readBlockEntity(dataConverter, dataVersion, bb);
+            if (!isBlockEntitySelected(polarBlockEntity, blockSelector, chunkX, chunkZ)) continue;
             addBlockEntity(polarBlockEntity, newLevelChunk);
         }
 
@@ -231,12 +264,40 @@ public class PolarStreamLoader {
         byte[] userData = live.minehub.polarpaper.core.util.ByteArrayUtil.getByteArray(bb);
 
         return prepareChunkAsync(newLevelChunk).thenCompose(_ ->
-                TaskFutures.runRegion(plugin, world, chunkX, chunkZ, () -> {
+                TaskFutures.runSync(plugin, () -> {
+                    newLevelChunk.tryMarkSaved();
                     insertChunk(serverLevel, newLevelChunk);
-                    worldAccess.loadChunkData(world, newLevelChunk, userData);
+                    worldAccess.loadChunkData(world, newLevelChunk, userData, blockSelector);
                     chunkLight.applyTo(serverLevel, newLevelChunk);
                     return null;
                 }));
+    }
+
+    /**
+     * Replaces every unselected block in a boundary section with air before the chunk becomes visible.
+     */
+    public static void maskOutsideSelection(@NotNull LevelChunkSection section, @NotNull BlockSelector blockSelector,
+                                            int chunkX, int chunkZ, int sectionY) {
+        if (blockSelector.containsEntireSection(chunkX, chunkZ, sectionY) || section.hasOnlyAir()) return;
+
+        BlockState air = Blocks.AIR.defaultBlockState();
+        for (int index = 0; index < PolarSection.BLOCK_PALETTE_SIZE; index++) {
+            if (blockSelector.test(index, chunkX, chunkZ, sectionY)) continue;
+
+            int x = CoordConversion.sectionBlockIndexGetX(index);
+            int y = CoordConversion.sectionBlockIndexGetY(index);
+            int z = CoordConversion.sectionBlockIndexGetZ(index);
+            if (!section.getBlockState(x, y, z).isAir()) section.setBlockState(x, y, z, air);
+        }
+    }
+
+    public static boolean isBlockEntitySelected(@NotNull PolarChunk.BlockEntity blockEntity,
+                                                 @NotNull BlockSelector blockSelector, int chunkX, int chunkZ) {
+        int index = blockEntity.index();
+        int x = chunkX * 16 + CoordConversion.chunkBlockIndexGetX(index);
+        int y = CoordConversion.chunkBlockIndexGetY(index);
+        int z = chunkZ * 16 + CoordConversion.chunkBlockIndexGetZ(index);
+        return blockSelector.test(x, y, z);
     }
 
     /**

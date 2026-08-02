@@ -12,7 +12,6 @@ import live.minehub.polarpaper.util.WorldKey;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.minecraft.resources.Identifier;
-import org.bukkit.Bukkit;
 import org.bukkit.World;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -59,9 +58,7 @@ public class SaveZSTDCommand extends PolarCmd {
 
 
 
-        Bukkit.getGlobalRegionScheduler().execute(PolarPaper.getPlugin(), () -> {
-            Polar.updateConfig(bukkitWorld, bukkitWorld.getKey().getKey()); // config should only be updated synchronously
-        });
+        Polar.updateConfig(bukkitWorld, bukkitWorld.getKey().getKey());
 
         for (int i = 0; i <= 22; i++) {
             long before = System.nanoTime();

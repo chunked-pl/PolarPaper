@@ -122,6 +122,103 @@ public interface BlockSelector {
         };
     }
 
+    /**
+     * Selects blocks inside a horizontal circle measured in block coordinates.
+     * <p>
+     * Unlike {@link #circle(int, int, int)}, whose coordinates and radius are expressed in chunks for legacy
+     * conversion commands, this selector masks individual blocks in chunks crossing the circle's edge.
+     */
+    static @NotNull BlockSelector horizontalCircle(int centerBlockX, int centerBlockZ, int radiusBlocks) {
+        if (radiusBlocks < 0) throw new IllegalArgumentException("Radius cannot be negative: " + radiusBlocks);
+
+        final long radiusSquared = (long) radiusBlocks * radiusBlocks;
+        return new BlockSelector() {
+            @Override
+            public boolean test(int x, int y, int z) {
+                long dx = (long) x - centerBlockX;
+                long dz = (long) z - centerBlockZ;
+                return dx * dx + dz * dz <= radiusSquared;
+            }
+
+            @Override
+            public boolean testChunk(int chunkX, int chunkZ) {
+                long minX = (long) chunkX * 16;
+                long minZ = (long) chunkZ * 16;
+                long nearestX = clamp(centerBlockX, minX, minX + 15);
+                long nearestZ = clamp(centerBlockZ, minZ, minZ + 15);
+                long dx = nearestX - centerBlockX;
+                long dz = nearestZ - centerBlockZ;
+                return dx * dx + dz * dz <= radiusSquared;
+            }
+
+            @Override
+            public boolean containsEntireSection(int chunkX, int chunkZ, int sectionY) {
+                long minX = (long) chunkX * 16;
+                long minZ = (long) chunkZ * 16;
+                long farthestX = Math.max(Math.abs(minX - centerBlockX), Math.abs(minX + 15 - centerBlockX));
+                long farthestZ = Math.max(Math.abs(minZ - centerBlockZ), Math.abs(minZ + 15 - centerBlockZ));
+                return farthestX * farthestX + farthestZ * farthestZ <= radiusSquared;
+            }
+
+            @Override
+            public void forEachChunk(Consumer<Vector2i> chunkConsumer) {
+                int minChunkX = (int) Math.floorDiv((long) centerBlockX - radiusBlocks, 16L);
+                int minChunkZ = (int) Math.floorDiv((long) centerBlockZ - radiusBlocks, 16L);
+                int maxChunkX = (int) Math.floorDiv((long) centerBlockX + radiusBlocks, 16L);
+                int maxChunkZ = (int) Math.floorDiv((long) centerBlockZ + radiusBlocks, 16L);
+
+                for (int chunkX = minChunkX; chunkX <= maxChunkX; chunkX++) {
+                    for (int chunkZ = minChunkZ; chunkZ <= maxChunkZ; chunkZ++) {
+                        if (testChunk(chunkX, chunkZ)) chunkConsumer.accept(new Vector2i(chunkX, chunkZ));
+                    }
+                }
+            }
+        };
+    }
+
+    /**
+     * Selects only positions accepted by both selectors.
+     */
+    static @NotNull BlockSelector intersection(@NotNull BlockSelector first, @NotNull BlockSelector second) {
+        if (first == ALL) return second;
+        if (second == ALL) return first;
+
+        return new BlockSelector() {
+            @Override
+            public boolean test(int x, int y, int z) {
+                return first.test(x, y, z) && second.test(x, y, z);
+            }
+
+            @Override
+            public boolean test(int index, int chunkX, int chunkZ, int sectionY) {
+                return first.test(index, chunkX, chunkZ, sectionY)
+                        && second.test(index, chunkX, chunkZ, sectionY);
+            }
+
+            @Override
+            public boolean testChunk(int chunkX, int chunkZ) {
+                return first.testChunk(chunkX, chunkZ) && second.testChunk(chunkX, chunkZ);
+            }
+
+            @Override
+            public boolean containsEntireSection(int chunkX, int chunkZ, int sectionY) {
+                return first.containsEntireSection(chunkX, chunkZ, sectionY)
+                        && second.containsEntireSection(chunkX, chunkZ, sectionY);
+            }
+
+            @Override
+            public void forEachChunk(Consumer<Vector2i> chunkConsumer) {
+                first.forEachChunk(chunk -> {
+                    if (second.testChunk(chunk.x, chunk.y)) chunkConsumer.accept(chunk);
+                });
+            }
+        };
+    }
+
+    private static long clamp(long value, long min, long max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
     boolean test(int x, int y, int z);
 
     default boolean test(int index, int chunkX, int chunkZ, int sectionY) {

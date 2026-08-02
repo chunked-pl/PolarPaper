@@ -7,7 +7,6 @@ import live.minehub.polarpaper.commands.CommandManager;
 import live.minehub.polarpaper.core.config.Config;
 import live.minehub.polarpaper.core.generator.PolarGenerator;
 import live.minehub.polarpaper.core.source.FilePolarSource;
-import live.minehub.polarpaper.core.util.FoliaUtil;
 import live.minehub.polarpaper.util.WorldKey;
 import org.bukkit.World;
 import org.bukkit.plugin.Plugin;
@@ -31,8 +30,6 @@ public final class PolarPaper extends JavaPlugin {
     @Override
     public void onEnable() {
         instance = this;
-
-        FoliaUtil.isFolia(); // Fix classloader error on stop
 
         // Paper commands
         LifecycleEventManager<@NotNull Plugin> manager = this.getLifecycleManager();
@@ -107,8 +104,14 @@ public final class PolarPaper extends JavaPlugin {
             getLogger().info("Saving '" + world.getKey().getKey() + "'...");
 
             long before = System.nanoTime();
-            Polar.updateConfig(world, world.getKey().getKey());
-            Polar.saveWorld(world).join(); // TODO: does not work on Folia as it schedules tasks
+            try {
+                Polar.updateConfig(world, world.getKey().getKey());
+                Polar.saveWorldSynchronously(world);
+            } catch (Exception e) {
+                getLogger().log(java.util.logging.Level.SEVERE,
+                        "Failed to save '" + world.getKey().getKey() + "' while stopping", e);
+                continue;
+            }
             int ms = (int) ((System.nanoTime() - before) / 1_000_000);
             getLogger().info(String.format("Saved '%s' in %sms", world.getKey().getKey(), ms));
         }

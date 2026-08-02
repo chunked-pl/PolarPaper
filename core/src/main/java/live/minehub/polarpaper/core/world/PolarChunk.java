@@ -96,16 +96,30 @@ public record PolarChunk(
     }
 
     public NoUnloadLevelChunk createLevelChunk(ServerLevel serverLevel) {
+        return createLevelChunk(serverLevel, BlockSelector.ALL);
+    }
+
+    public NoUnloadLevelChunk createLevelChunk(ServerLevel serverLevel, BlockSelector blockSelector) {
         int sectionCount = sections().length;
         ChunkPos chunkPos = new ChunkPos(x, z);
         int minSectionY = serverLevel.getMinSectionY();
 
         ChunkLight chunkLight = new ChunkLight(serverLevel, sectionCount);
         LevelChunkSection[] levelChunkSections = new LevelChunkSection[sectionCount];
+        boolean preserveStoredLight = true;
         for (int i = 0; i < sectionCount; i++) {
             PolarSection polarSection = sections()[i];
-            levelChunkSections[i] = polarSection.createLevelChunkSection(serverLevel, chunkPos, minSectionY + i);
-            chunkLight.addSection(i, polarSection);
+            int sectionY = minSectionY + i;
+            LevelChunkSection levelChunkSection = polarSection.createLevelChunkSection(serverLevel, chunkPos, sectionY);
+            levelChunkSections[i] = levelChunkSection;
+            if (blockSelector.containsEntireSection(x, z, sectionY)) continue;
+
+            preserveStoredLight = false;
+            PolarStreamLoader.maskOutsideSelection(levelChunkSection, blockSelector, x, z, sectionY);
+        }
+
+        if (preserveStoredLight) {
+            for (int i = 0; i < sectionCount; i++) chunkLight.addSection(i, sections()[i]);
         }
 
         NoUnloadLevelChunk chunk = new NoUnloadLevelChunk(serverLevel, chunkPos, UpgradeData.EMPTY, new LevelChunkTicks<>(), new LevelChunkTicks<>(), 0L, levelChunkSections, null, null);
@@ -199,6 +213,19 @@ public record PolarChunk(
     }
 
     public static CompletableFuture<@Nullable PolarChunk> convert(World world, ChunkAccess chunkAccess, @Nullable ChunkEntitySlices entityChunk, PolarWorldAccess worldAccess, BlockSelector blockSelector, boolean saveLight) {
+        return convertInternal(world, chunkAccess, entityChunk, worldAccess, blockSelector, saveLight, true);
+    }
+
+    public static @Nullable PolarChunk convertSynchronously(World world, ChunkAccess chunkAccess,
+                                                             @Nullable ChunkEntitySlices entityChunk,
+                                                             PolarWorldAccess worldAccess,
+                                                             BlockSelector blockSelector, boolean saveLight) {
+        return convertInternal(world, chunkAccess, entityChunk, worldAccess, blockSelector, saveLight, false).join();
+    }
+
+    private static CompletableFuture<@Nullable PolarChunk> convertInternal(
+            World world, ChunkAccess chunkAccess, @Nullable ChunkEntitySlices entityChunk,
+            PolarWorldAccess worldAccess, BlockSelector blockSelector, boolean saveLight, boolean asyncFinish) {
         int chunkX = chunkAccess.locX;
         int chunkZ = chunkAccess.locZ;
         ServerLevel serverLevel = ((CraftWorld) world).getHandle();
@@ -224,38 +251,28 @@ public record PolarChunk(
         List<PolarChunk.BlockEntity> polarBlockEntities = new ArrayList<>();
         Map<BlockPos, net.minecraft.world.level.block.entity.BlockEntity> blockEntities = new HashMap<>();
 
-        CompletableFuture<Void> future = new CompletableFuture<>();
-        try {
-            FoliaUtil.scheduleOnRegionIfFolia(worldAccess.getPlugin(), world, chunkX, chunkZ, () -> {
-                try {
-                    for (BlockPos blockPos : chunkAccess.getBlockEntitiesPos()) {
-                        net.minecraft.world.level.block.entity.BlockEntity blockEntity = chunkAccess.getBlockEntity(blockPos);
+        CompletableFuture<Void> future = TaskFutures.runSync(worldAccess.getPlugin(), () -> {
+            for (BlockPos blockPos : chunkAccess.getBlockEntitiesPos()) {
+                net.minecraft.world.level.block.entity.BlockEntity blockEntity = chunkAccess.getBlockEntity(blockPos);
 
-                        if (blockEntity == null) continue;
-                        if (!blockSelector.test(blockPos.getX(), blockPos.getY(), blockPos.getZ())) continue;
+                if (blockEntity == null) continue;
+                if (!blockSelector.test(blockPos.getX(), blockPos.getY(), blockPos.getZ())) continue;
 
-                        CompoundTag compoundTag = blockEntity.saveWithFullMetadata(registryAccess);
+                CompoundTag compoundTag = blockEntity.saveWithFullMetadata(registryAccess);
 
-                        Optional<String> id = compoundTag.getString("id");
-                        if (id.isEmpty()) {
-                            LOGGER.warn("No ID in block entity data at: {}", blockPos);
-                            LOGGER.warn("Compound tag: {}", compoundTag);
-                            continue;
-                        }
-
-                        int index = CoordConversion.chunkBlockIndex(blockPos.getX(), blockPos.getY(), blockPos.getZ());
-                        polarBlockEntities.add(new BlockEntity(index, id.get(), compoundTag));
-                        blockEntities.put(blockPos, blockEntity);
-                    }
-
-                    future.complete(null);
-                } catch (Throwable throwable) {
-                    future.completeExceptionally(throwable);
+                Optional<String> id = compoundTag.getString("id");
+                if (id.isEmpty()) {
+                    LOGGER.warn("No ID in block entity data at: {}", blockPos);
+                    LOGGER.warn("Compound tag: {}", compoundTag);
+                    continue;
                 }
-            });
-        } catch (Throwable throwable) {
-            future.completeExceptionally(throwable);
-        }
+
+                int index = CoordConversion.chunkBlockIndex(blockPos.getX(), blockPos.getY(), blockPos.getZ());
+                polarBlockEntities.add(new BlockEntity(index, id.get(), compoundTag));
+                blockEntities.put(blockPos, blockEntity);
+            }
+            return null;
+        });
 
         Function<Void, PolarChunk> finishConversion = _ -> {
             int[][] heightMaps = new int[PolarChunk.MAX_HEIGHTMAPS][];
@@ -281,8 +298,7 @@ public record PolarChunk(
             );
         };
 
-        // A Folia region task must not block while entity serialization schedules work back onto entity threads.
-        CompletableFuture<PolarChunk> converted = FoliaUtil.isFolia()
+        CompletableFuture<PolarChunk> converted = asyncFinish
                 ? future.thenApplyAsync(finishConversion)
                 : future.thenApply(finishConversion);
         return converted.exceptionally(e -> {

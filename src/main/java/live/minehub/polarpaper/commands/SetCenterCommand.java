@@ -48,7 +48,7 @@ public class SetCenterCommand extends PolarCmd {
             return Command.SINGLE_SUCCESS;
         }
 
-        Bukkit.getAsyncScheduler().runNow(PolarPaper.getPlugin(), _ -> {
+        Bukkit.getScheduler().runTaskAsynchronously(PolarPaper.getPlugin(), () -> {
             try {
                 PolarSource source = polarGenerator.getSource();
                 if (source == null) {

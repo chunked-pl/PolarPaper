@@ -1,12 +1,11 @@
 package live.minehub.polarpaper.core.userdata;
 
-import ca.spottedleaf.moonrise.common.util.TickThread;
-import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import net.minecraft.nbt.CompoundTag;
+import org.bukkit.Bukkit;
 import org.bukkit.World;
-import org.bukkit.craftbukkit.entity.CraftEntity;
 import org.bukkit.entity.Entity;
 import org.bukkit.plugin.Plugin;
+import org.bukkit.scheduler.BukkitTask;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
@@ -30,7 +29,7 @@ public interface EntitySerializer {
     CompletableFuture<byte @Nullable []> entityToBytes(Entity entity, Plugin plugin);
 
     /**
-     * Runs a serialisation attempt on the entity's own thread and waits for the result, for the cases where
+     * Runs a serialisation attempt on Paper's main thread and waits for the result, for the cases where
      * saving an entity fires events that must not run asynchronously.
      * <p>
      * The wait is bounded. A removed entity or a shutting down server may never run the scheduled task, and
@@ -39,7 +38,7 @@ public interface EntitySerializer {
      * @return whether the entity was saved
      */
     static boolean saveOnEntityThread(@NotNull Entity entity, @NotNull Plugin plugin, @NotNull BooleanSupplier save) {
-        if (TickThread.isTickThreadFor(((CraftEntity) entity).getHandleRaw())) {
+        if (Bukkit.isPrimaryThread()) {
             try {
                 return save.getAsBoolean();
             } catch (Throwable throwable) {
@@ -49,15 +48,19 @@ public interface EntitySerializer {
         }
 
         CompletableFuture<Boolean> saved = new CompletableFuture<>();
-        ScheduledTask task = entity.getScheduler().run(plugin, _ -> {
-            try {
-                saved.complete(save.getAsBoolean());
-            } catch (Throwable throwable) {
-                saved.completeExceptionally(throwable);
-            }
-        }, () -> saved.complete(false)); // retired: the entity was removed before the task ran
-
-        if (task == null) return false; // the entity was already removed, so there is nothing left to save
+        BukkitTask task;
+        try {
+            task = Bukkit.getScheduler().runTask(plugin, () -> {
+                try {
+                    saved.complete(save.getAsBoolean());
+                } catch (Throwable throwable) {
+                    saved.completeExceptionally(throwable);
+                }
+            });
+        } catch (Throwable throwable) {
+            LOGGER.error("Failed to schedule serialization of entity {}", entity.getUniqueId(), throwable);
+            return false;
+        }
 
         try {
             return saved.get(SAVE_TIMEOUT_SECONDS, TimeUnit.SECONDS);

@@ -9,7 +9,6 @@ import io.papermc.paper.command.brigadier.Commands;
 import live.minehub.polarpaper.PolarPaper;
 import live.minehub.polarpaper.core.config.Config;
 import live.minehub.polarpaper.core.generator.PolarGenerator;
-import live.minehub.polarpaper.core.util.FoliaUtil;
 import live.minehub.polarpaper.core.util.TaskFutures;
 import live.minehub.polarpaper.util.WorldKey;
 import net.kyori.adventure.text.Component;
@@ -40,14 +39,6 @@ public class UnloadCommand extends PolarCmd {
     }
 
     protected static CompletableFuture<Boolean> unload(CommandContext<CommandSourceStack> ctx, Identifier worldId, boolean saveOverrided, boolean save) {
-        if (FoliaUtil.isFolia()) {
-            ctx.getSource().getSender().sendMessage(
-                    Component.text()
-                            .append(Component.text("Unloading worlds is not supported on Folia!", NamedTextColor.RED))
-            );
-            return CompletableFuture.completedFuture(false);
-        }
-
         World bukkitWorld = WorldKey.getWorld(worldId);
         if (bukkitWorld == null) {
             ctx.getSource().getSender().sendMessage(

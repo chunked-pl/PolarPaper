@@ -7,6 +7,7 @@ import live.minehub.polarpaper.core.userdata.EntitySerializer;
 import live.minehub.polarpaper.core.userdata.EntityUtil;
 import live.minehub.polarpaper.core.util.ByteArrayUtil;
 import live.minehub.polarpaper.core.world.PolarEntity;
+import live.minehub.polarpaper.core.world.BlockSelector;
 import live.minehub.polarpaper.core.world.PolarWorldAccess;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
@@ -59,6 +60,12 @@ public class EntitiesWorldAccess implements PolarWorldAccess {
 
     @Override
     public void loadChunkData(@NotNull World world, @NotNull ChunkAccess chunk, final byte @Nullable [] userData) {
+        loadChunkData(world, chunk, userData, BlockSelector.ALL);
+    }
+
+    @Override
+    public void loadChunkData(@NotNull World world, @NotNull ChunkAccess chunk, final byte @Nullable [] userData,
+                              @NotNull BlockSelector blockSelector) {
         if (userData == null || userData.length == 0) return;
 
         ServerLevel level = ((CraftWorld) world).getHandle();
@@ -71,7 +78,12 @@ public class EntitiesWorldAccess implements PolarWorldAccess {
         List<net.minecraft.world.entity.Entity> successEntities = new ArrayList<>();
 
         for (PolarEntity polarEntity : entities) {
-            net.minecraft.world.entity.Entity entity = polarEntity.toNMSEntity(entitySerializer, world, polarEntity.getLocation(world, chunk.locX, chunk.locZ), true);
+            Location entityLocation = polarEntity.getLocation(world, chunk.locX, chunk.locZ);
+            if (!blockSelector.test(entityLocation.getBlockX(), entityLocation.getBlockY(), entityLocation.getBlockZ())) {
+                continue;
+            }
+
+            net.minecraft.world.entity.Entity entity = polarEntity.toNMSEntity(entitySerializer, world, entityLocation, true);
             if (entity == null) continue;
 
             CraftEntity bukkitEntity = entity.getBukkitEntity();

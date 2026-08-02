@@ -60,6 +60,15 @@ public interface PolarWorldAccess {
     }
 
     /**
+     * Radius-aware variant used while loading cropped worlds. Existing implementations remain compatible and
+     * receive the original callback; implementations that store positioned objects can additionally filter them.
+     */
+    default void loadChunkData(@NotNull World world, @NotNull ChunkAccess chunk, byte @Nullable [] userData,
+                               @NotNull BlockSelector blockSelector) {
+        loadChunkData(world, chunk, userData);
+    }
+
+    /**
      * Called when a chunk is being populated, after it's been added to the world.
      * <br/><br/>
      * Can be used to access user data after the chunk has been loaded.

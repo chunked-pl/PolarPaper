@@ -14,7 +14,6 @@ import net.kyori.adventure.text.event.HoverEvent;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.format.TextDecoration;
 import net.minecraft.resources.Identifier;
-import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.World;
 import org.bukkit.command.CommandSender;
@@ -68,24 +67,22 @@ public class GotoCommand extends PolarCmd {
             return Command.SINGLE_SUCCESS;
         }
 
-        Bukkit.getGlobalRegionScheduler().execute(PolarPaper.getPlugin(), () -> {
-            PolarGenerator polarGenerator = PolarGenerator.fromWorld(bukkitWorld);
-            // Non polar worlds have no polar config, so fall back to the world's own spawn.
-            // Copied either way, so teleporting cannot move the spawn stored in the config.
-            Location spawnPos = polarGenerator == null
-                    ? bukkitWorld.getSpawnLocation()
-                    : Config.readFromConfig(PolarPaper.getPlugin().getConfig(), bukkitWorld).spawn().clone();
+        PolarGenerator polarGenerator = PolarGenerator.fromWorld(bukkitWorld);
+        // Non polar worlds have no polar config, so fall back to the world's own spawn.
+        // Copied either way, so teleporting cannot move the spawn stored in the config.
+        Location spawnPos = polarGenerator == null
+                ? bukkitWorld.getSpawnLocation()
+                : Config.readFromConfig(PolarPaper.getPlugin().getConfig(), bukkitWorld).spawn().clone();
 
-            sender.sendMessage(
-                    Component.text()
-                            .append(Component.text("Teleporting to '", NamedTextColor.AQUA))
-                            .append(Component.text(bukkitWorld.getKey().getKey(), NamedTextColor.AQUA))
-                            .append(Component.text("'", NamedTextColor.AQUA))
-            );
+        sender.sendMessage(
+                Component.text()
+                        .append(Component.text("Teleporting to '", NamedTextColor.AQUA))
+                        .append(Component.text(bukkitWorld.getKey().getKey(), NamedTextColor.AQUA))
+                        .append(Component.text("'", NamedTextColor.AQUA))
+        );
 
-            spawnPos.setWorld(bukkitWorld);
-            player.teleportAsync(spawnPos);
-        });
+        spawnPos.setWorld(bukkitWorld);
+        player.teleportAsync(spawnPos);
 
         return Command.SINGLE_SUCCESS;
     }

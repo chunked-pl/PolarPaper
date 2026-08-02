@@ -4,13 +4,11 @@ import com.mojang.brigadier.Command;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
-import live.minehub.polarpaper.PolarPaper;
 import live.minehub.polarpaper.core.generator.PolarGenerator;
 import live.minehub.polarpaper.util.WorldKey;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.minecraft.resources.Identifier;
-import org.bukkit.Bukkit;
 import org.bukkit.NamespacedKey;
 import org.bukkit.World;
 import org.bukkit.command.CommandSender;
@@ -45,10 +43,8 @@ public class InfoCommand extends PolarCmd {
             return Command.SINGLE_SUCCESS;
         }
 
-        Bukkit.getGlobalRegionScheduler().execute(PolarPaper.getPlugin(), () -> {
-            Component infoComponent = polarGenerator.getInfoComponent(bukkitWorld);
-            ctx.getSource().getSender().sendMessage(infoComponent);
-        });
+        Component infoComponent = polarGenerator.getInfoComponent(bukkitWorld);
+        ctx.getSource().getSender().sendMessage(infoComponent);
 
         return Command.SINGLE_SUCCESS;
     }

@@ -2,7 +2,6 @@ package live.minehub.polarpaper.paper_26_1;
 
 import com.mojang.logging.LogUtils;
 import live.minehub.polarpaper.core.userdata.EntitySerializer;
-import live.minehub.polarpaper.core.util.FoliaUtil;
 import net.minecraft.SharedConstants;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.NbtIo;
@@ -41,13 +40,7 @@ public class EntitySerializerImpl implements EntitySerializer {
     public CompletableFuture<byte @Nullable []> entityToBytes(Entity entity, Plugin plugin) {
         CompletableFuture<byte @Nullable []> byteArrayFuture = new CompletableFuture<>();
         try {
-            FoliaUtil.scheduleOnEntityIfFolia(plugin, entity, () -> {
-                try {
-                    serializeEntity(entity, plugin, byteArrayFuture);
-                } catch (Throwable throwable) {
-                    byteArrayFuture.completeExceptionally(throwable);
-                }
-            }, () -> byteArrayFuture.complete(null));
+            serializeEntity(entity, plugin, byteArrayFuture);
         } catch (Throwable throwable) {
             byteArrayFuture.completeExceptionally(throwable);
         }

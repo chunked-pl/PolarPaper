@@ -29,7 +29,6 @@ dependencies {
 }
 
 tasks {
-    runPaper.folia.registerTask()
     runServer {
 //        minecraftVersion(libs.versions.minecraft.get())
         minecraftVersion("1.21.11")
@@ -107,8 +106,6 @@ paperPluginYaml {
     website = "https://github.com/MinehubMC/PolarPaper"
     description = "Polar world format for Paper"
     apiVersion = libs.versions.minecraft.get()
-
-    foliaSupported = true
 
     main = "live.minehub.polarpaper.PolarPaper"
     loader = "live.minehub.polarpaper.PolarPaperLoader"

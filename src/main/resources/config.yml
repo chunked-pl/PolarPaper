@@ -6,6 +6,7 @@ default:
   saveOnStop: false
   loadOnStartup: true
   spawn: 0.0, 64.0, 0.0, 0.0, 0.0
+  worldRadiusBlocks: 570 # Circular radius around spawn; blocks and entities outside it are discarded
   difficulty: NORMAL
   async: false
   saveLight: true # Whether chunks are saved with light data. Reduces load time and CPU usage while loading but increases world size

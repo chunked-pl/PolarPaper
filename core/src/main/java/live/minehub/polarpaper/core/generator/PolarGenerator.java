@@ -2,6 +2,7 @@ package live.minehub.polarpaper.core.generator;
 
 import live.minehub.polarpaper.core.config.Config;
 import live.minehub.polarpaper.core.source.PolarSource;
+import live.minehub.polarpaper.core.world.BlockSelector;
 import live.minehub.polarpaper.core.world.PolarWorld;
 import live.minehub.polarpaper.core.world.PolarWorldAccess;
 import net.kyori.adventure.text.Component;
@@ -42,6 +43,11 @@ public abstract class PolarGenerator extends ChunkGenerator {
 
     public PolarWorldAccess getWorldAccess() {
         return this.worldAccess;
+    }
+
+    public @NotNull BlockSelector getWorldBlockSelector() {
+        Location spawn = config.spawn();
+        return BlockSelector.horizontalCircle(spawn.getBlockX(), spawn.getBlockZ(), config.worldRadiusBlocks());
     }
 
     public abstract @Nullable PolarWorld getPolarWorld();

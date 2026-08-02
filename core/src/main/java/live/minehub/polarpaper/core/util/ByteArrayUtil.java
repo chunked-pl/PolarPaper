@@ -27,6 +27,12 @@ public class ByteArrayUtil {
         return bytes;
     }
 
+    public static void skipByteArray(ByteBuf bb) {
+        int length = getVarInt(bb);
+        requireReadableLength(bb, length, 1, "byte array");
+        bb.skipBytes(length);
+    }
+
     public static long[] getLongArray(ByteBuf bb) {
         int packedLength = getVarInt(bb);
         requireReadableLength(bb, packedLength, Long.BYTES, "long array");
@@ -35,6 +41,12 @@ public class ByteArrayUtil {
             longs[i] = bb.readLong();
         }
         return longs;
+    }
+
+    public static void skipLongArray(ByteBuf bb) {
+        int length = getVarInt(bb);
+        requireReadableLength(bb, length, Long.BYTES, "long array");
+        bb.skipBytes(length * Long.BYTES);
     }
 
     // Copyright 2019 Google LLC
@@ -58,6 +70,11 @@ public class ByteArrayUtil {
         bb.readBytes(bytes);
         return new String(bytes, StandardCharsets.UTF_8);
     }
+    public static void skipString(ByteBuf bb) {
+        int length = getVarInt(bb);
+        requireReadableLength(bb, length, 1, "string");
+        bb.skipBytes(length);
+    }
     public static @Nullable String getStringOptional(ByteBuf bb) {
         boolean present = bb.readByte() == 1;
         if (!present) return null;
@@ -73,6 +90,14 @@ public class ByteArrayUtil {
             strings[i] = getString(bb);
         }
         return strings;
+    }
+    public static int skipStringList(ByteBuf bb, int maxSize) {
+        int length = getVarInt(bb);
+        if (length < 0 || length > maxSize || length > bb.readableBytes()) {
+            throw new IllegalArgumentException("Invalid string list length: " + length);
+        }
+        for (int i = 0; i < length; i++) skipString(bb);
+        return length;
     }
     public static byte[] getLightData(ByteBuf bb) {
         byte[] bytes = new byte[LightUtil.LIGHT_LENGTH];

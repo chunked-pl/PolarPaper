@@ -7,11 +7,11 @@ import io.papermc.paper.command.brigadier.CommandSourceStack;
 import live.minehub.polarpaper.Polar;
 import live.minehub.polarpaper.PolarPaper;
 import live.minehub.polarpaper.core.generator.PolarGenerator;
+import live.minehub.polarpaper.core.util.TaskFutures;
 import live.minehub.polarpaper.util.WorldKey;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.minecraft.resources.Identifier;
-import org.bukkit.Bukkit;
 import org.bukkit.World;
 import org.bukkit.command.CommandSender;
 import org.slf4j.Logger;
@@ -61,11 +61,10 @@ public class SaveCommand extends PolarCmd {
 
         long before = System.nanoTime();
 
-        Bukkit.getGlobalRegionScheduler().execute(PolarPaper.getPlugin(), () -> {
-            Polar.updateConfig(bukkitWorld, bukkitWorld.getKey().getKey()); // config should only be updated synchronously
-        });
-
-        return Polar.saveWorld(bukkitWorld).thenApply(_ -> {
+        return TaskFutures.runSync(PolarPaper.getPlugin(),
+                        () -> Polar.updateConfig(bukkitWorld, bukkitWorld.getKey().getKey()))
+                .thenCompose(_ -> Polar.saveWorld(bukkitWorld))
+                .thenApply(_ -> {
             int ms = (int) ((System.nanoTime() - before) / 1_000_000);
             sender.sendMessage(
                     Component.text()
@@ -77,7 +76,7 @@ public class SaveCommand extends PolarCmd {
             );
 
             return true;
-        }).exceptionally(e -> {
+                }).exceptionally(e -> {
             String errorMsg = String.format("Failed to save '%s'", bukkitWorld.getKey().getKey());
             LOGGER.error(errorMsg, e);
             sender.sendMessage(Component.text(errorMsg, NamedTextColor.RED));

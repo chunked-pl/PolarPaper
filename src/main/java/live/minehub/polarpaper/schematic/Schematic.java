@@ -61,7 +61,7 @@ public class Schematic {
         }
 
         Vector3i finalOffset = offset;
-        Bukkit.getGlobalRegionScheduler().execute(PolarPaper.getPlugin(), () -> {
+        Bukkit.getScheduler().runTask(PolarPaper.getPlugin(), () -> {
             for (Map.Entry<Vector3i, PolarChunk.BlockEntity> entry : blockEntityMap.entrySet()) {
                 Vector3i blockOffset = entry.getKey();
                 PolarChunk.BlockEntity blockEntity = entry.getValue();

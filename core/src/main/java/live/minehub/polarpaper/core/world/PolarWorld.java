@@ -6,6 +6,7 @@ import live.minehub.polarpaper.core.config.Config;
 import live.minehub.polarpaper.core.util.CoordConversion;
 import net.minecraft.SharedConstants;
 import net.minecraft.server.level.ServerLevel;
+import org.bukkit.Bukkit;
 import org.bukkit.World;
 import org.bukkit.craftbukkit.CraftWorld;
 import org.jetbrains.annotations.NotNull;
@@ -260,7 +261,11 @@ public class PolarWorld {
             if (!blockSelector.testChunk(chunk.x(), chunk.z())) continue;
             chunkIndexes.add(CoordConversion.chunkIndex(chunk.x(), chunk.z()));
         }
-        blockSelector.forEachChunk(chunkPos -> chunkIndexes.add(CoordConversion.chunkIndex(chunkPos.x, chunkPos.y)));
+        // Only enumerate every selected coordinate when callers explicitly asked to load missing chunks. Normal
+        // saves use the already included/loaded chunks below and avoid thousands of pointless radius lookups.
+        if (loadChunks) {
+            blockSelector.forEachChunk(chunkPos -> chunkIndexes.add(CoordConversion.chunkIndex(chunkPos.x, chunkPos.y)));
+        }
         for (NewChunkHolder chunkHolder : chunkHolderManager.getChunkHolders()) {
             if (!blockSelector.testChunk(chunkHolder.chunkX, chunkHolder.chunkZ)) continue;
             chunkIndexes.add(CoordConversion.chunkIndex(chunkHolder.chunkX, chunkHolder.chunkZ));
@@ -295,5 +300,70 @@ public class PolarWorld {
                     chunks
             );
         });
+    }
+
+    /**
+     * Shutdown-only conversion. Paper disables task execution while a plugin is stopping, so a main-thread
+     * shutdown save must not start asynchronous work that later schedules back onto the blocked main thread.
+     */
+    public static PolarWorld convertSynchronously(World world, PolarWorldAccess polarWorldAccess,
+                                                   BlockSelector blockSelector, Config config,
+                                                   Collection<PolarChunk> includedChunks) {
+        if (!Bukkit.isPrimaryThread()) {
+            throw new IllegalStateException("Synchronous world conversion must run on Paper's main thread");
+        }
+
+        ServerLevel serverLevel = ((CraftWorld) world).getHandle();
+        ChunkHolderManager chunkHolderManager = serverLevel.moonrise$getChunkTaskScheduler().chunkHolderManager;
+
+        Map<Long, PolarChunk> includedByIndex = new java.util.LinkedHashMap<>();
+        for (PolarChunk chunk : includedChunks) {
+            if (!blockSelector.testChunk(chunk.x(), chunk.z())) continue;
+            includedByIndex.put(CoordConversion.chunkIndex(chunk.x(), chunk.z()), chunk);
+        }
+
+        Set<Long> chunkIndexes = new LinkedHashSet<>(includedByIndex.keySet());
+        for (NewChunkHolder chunkHolder : chunkHolderManager.getChunkHolders()) {
+            if (!blockSelector.testChunk(chunkHolder.chunkX, chunkHolder.chunkZ)) continue;
+            chunkIndexes.add(CoordConversion.chunkIndex(chunkHolder.chunkX, chunkHolder.chunkZ));
+        }
+
+        List<PolarChunk> chunks = new ArrayList<>(chunkIndexes.size());
+        for (long chunkIndex : chunkIndexes) {
+            int chunkX = CoordConversion.chunkX(chunkIndex);
+            int chunkZ = CoordConversion.chunkZ(chunkIndex);
+            NewChunkHolder holder = chunkHolderManager.getChunkHolder(chunkX, chunkZ);
+
+            if (holder != null && holder.getCurrentChunk() != null) {
+                PolarChunk converted = PolarChunk.convertSynchronously(
+                        world, holder.getCurrentChunk(), holder.getEntityChunk(),
+                        polarWorldAccess, blockSelector, config.saveLight());
+                if (converted != null) chunks.add(converted);
+                continue;
+            }
+
+            PolarChunk included = includedByIndex.get(chunkIndex);
+            if (included != null && containsEntireStoredChunk(blockSelector, included, world.getMinHeight())) {
+                chunks.add(included);
+            } else if (included != null) {
+                LOGGER.warn("Dropping unloaded boundary chunk at {} {} during shutdown save to keep the world radius safe",
+                        chunkX, chunkZ);
+            }
+        }
+
+        return new PolarWorld(
+                (byte) CoordConversion.sectionIndex(world.getMinHeight()),
+                (byte) CoordConversion.sectionIndex(world.getMaxHeight() - 1),
+                config,
+                chunks
+        );
+    }
+
+    private static boolean containsEntireStoredChunk(BlockSelector blockSelector, PolarChunk chunk, int minHeight) {
+        int minSection = CoordConversion.sectionIndex(minHeight);
+        for (int i = 0; i < chunk.sections().length; i++) {
+            if (!blockSelector.containsEntireSection(chunk.x(), chunk.z(), minSection + i)) return false;
+        }
+        return true;
     }
 }

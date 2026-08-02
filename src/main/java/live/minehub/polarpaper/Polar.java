@@ -1,6 +1,5 @@
 package live.minehub.polarpaper;
 
-import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import live.minehub.polarpaper.core.config.Config;
 import live.minehub.polarpaper.core.generator.PolarGenerator;
 import live.minehub.polarpaper.core.generator.PolarStreamingGenerator;
@@ -18,6 +17,7 @@ import org.bukkit.*;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.craftbukkit.CraftWorld;
 import org.bukkit.entity.Player;
+import org.bukkit.scheduler.BukkitTask;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
@@ -36,7 +36,7 @@ public class Polar {
     private static final Logger LOGGER = LoggerFactory.getLogger(Polar.class);
 
     private static final Set<NamespacedKey> LOADING_WORLDS = new CopyOnWriteArraySet<>();
-    private static final Map<NamespacedKey, ScheduledTask> AUTOSAVE_TASK_MAP = new ConcurrentHashMap<>();
+    private static final Map<NamespacedKey, BukkitTask> AUTOSAVE_TASK_MAP = new ConcurrentHashMap<>();
 
     private Polar() {
 
@@ -165,7 +165,9 @@ public class Polar {
             try {
                 streamed = worldBytes == null || worldBytes.length == 0
                         ? CompletableFuture.completedFuture(null)
-                        : PolarStreamLoader.stream(worldBytes, world, worldAccess);
+                        : PolarStreamLoader.stream(worldBytes, world, worldAccess,
+                                BlockSelector.horizontalCircle(config.spawn().getBlockX(), config.spawn().getBlockZ(),
+                                        config.worldRadiusBlocks()));
             } catch (Throwable t) {
                 streamed = CompletableFuture.failedFuture(t);
             }
@@ -188,19 +190,24 @@ public class Polar {
         return createWorld(generator, worldName).thenComposeAsync(world -> {
             if (world == null) return CompletableFuture.completedFuture(null);
             ServerLevel level = ((CraftWorld) world).getHandle();
+            BlockSelector blockSelector = BlockSelector.horizontalCircle(
+                    config.spawn().getBlockX(), config.spawn().getBlockZ(), config.worldRadiusBlocks());
             List<CompletableFuture<Void>> futures = new ArrayList<>();
             Throwable preparationFailure = null;
             for (PolarChunk chunk : polarWorld.chunks()) {
+                if (!blockSelector.testChunk(chunk.x(), chunk.z())) continue;
                 try {
-                    NoUnloadLevelChunk levelChunk = chunk.createLevelChunk(level);
+                    NoUnloadLevelChunk levelChunk = chunk.createLevelChunk(level, blockSelector);
 
                     futures.add(PolarStreamLoader.prepareChunkAsync(levelChunk)
-                            .thenCompose(_ -> TaskFutures.runRegion(PolarPaper.getPlugin(), world, chunk.x(), chunk.z(), () -> {
+                            .thenCompose(_ -> TaskFutures.runSync(PolarPaper.getPlugin(), () -> {
                                 for (PolarChunk.BlockEntity blockEntity : chunk.blockEntities()) {
+                                    if (!PolarStreamLoader.isBlockEntitySelected(blockEntity, blockSelector, chunk.x(), chunk.z())) continue;
                                     PolarStreamLoader.addBlockEntity(blockEntity, levelChunk);
                                 }
+                                levelChunk.tryMarkSaved();
                                 PolarStreamLoader.insertChunk(level, levelChunk);
-                                worldAccess.loadChunkData(world, levelChunk, chunk.userData());
+                                worldAccess.loadChunkData(world, levelChunk, chunk.userData(), blockSelector);
                                 return (Void) null;
                             }))
                             .whenComplete((_, ex) -> {
@@ -315,7 +322,7 @@ public class Polar {
     public static void stopAutoSaveTask(NamespacedKey worldKey) {
         // Removed as well as cancelled: the task holds on to the world, which would otherwise stay in memory
         // for as long as the server runs after being unloaded
-        ScheduledTask prevTask = AUTOSAVE_TASK_MAP.remove(worldKey);
+        BukkitTask prevTask = AUTOSAVE_TASK_MAP.remove(worldKey);
         if (prevTask != null) prevTask.cancel();
     }
 
@@ -335,7 +342,7 @@ public class Polar {
 
         AtomicBoolean saveInProgress = new AtomicBoolean();
 
-        ScheduledTask autosaveTask = Bukkit.getGlobalRegionScheduler().runAtFixedRate(PolarPaper.getPlugin(), t -> {
+        BukkitTask autosaveTask = Bukkit.getScheduler().runTaskTimer(PolarPaper.getPlugin(), () -> {
             if (!saveInProgress.compareAndSet(false, true)) {
                 LOGGER.warn("Skipping autosave for '{}' because the previous save is still running", world.getKey().getKey());
                 return;
@@ -398,6 +405,9 @@ public class Polar {
 
         Config.writeToConfig(PolarPaper.getConfigPath(), fileConfig, worldName, newConfig);
 
+        PolarGenerator generator = PolarGenerator.fromWorld(world);
+        if (generator != null) generator.setConfig(newConfig);
+
         return newConfig;
     }
 
@@ -413,6 +423,9 @@ public class Polar {
         Config config = Config.readFromConfig(PolarPaper.getPlugin().getConfig(), world);
 
         generator.setConfig(config);
+        Location spawn = config.spawn().clone();
+        spawn.setWorld(world);
+        world.setSpawnLocation(spawn);
 
         world.setDifficulty(org.bukkit.Difficulty.valueOf(config.difficulty().name()));
 
@@ -463,6 +476,27 @@ public class Polar {
     }
 
     /**
+     * Saves on the current Paper main thread. Intended only for plugin shutdown, when scheduling a continuation
+     * back to that same thread and waiting for it would deadlock.
+     */
+    public static void saveWorldSynchronously(World world) throws Exception {
+        PolarGenerator generator = PolarGenerator.fromWorld(world);
+        if (generator == null || generator.getSource() == null) return;
+        if (Polar.isLoading(world.getKey())) {
+            throw new IllegalStateException(world.getKey() + " is still loading");
+        }
+
+        Config config = generator.getConfig();
+        BlockSelector blockSelector = generator.getWorldBlockSelector();
+        Collection<PolarChunk> extraChunks = generator.getPolarWorld() == null
+                ? List.of()
+                : generator.getPolarWorld().chunks();
+        PolarWorld polarWorld = PolarWorld.convertSynchronously(
+                world, generator.getWorldAccess(), blockSelector, config, extraChunks);
+        generator.getSource().saveBytes(PolarWriter.write(polarWorld));
+    }
+
+    /**
      * Updates and saves a polar world asynchronously using the given source
      * <br>
      * The future is completed exceptionally if saving failed
@@ -479,9 +513,13 @@ public class Polar {
     public static CompletableFuture<Void> saveWorld(World world, Collection<PolarChunk> extraChunks, PolarSource polarSource, PolarWorldAccess polarWorldAccess, BlockSelector blockSelector, Config config) {
         if (Polar.isLoading(world.getKey())) return CompletableFuture.failedFuture(new IllegalStateException(world.getKey() + " is still loading"));
 
+        BlockSelector radiusSelector = BlockSelector.horizontalCircle(
+                config.spawn().getBlockX(), config.spawn().getBlockZ(), config.worldRadiusBlocks());
+        BlockSelector boundedSelector = BlockSelector.intersection(blockSelector, radiusSelector);
+
         CompletableFuture<PolarWorld> future;
         try {
-            future = PolarWorld.convert(world, polarWorldAccess, blockSelector, config, extraChunks, false);
+            future = PolarWorld.convert(world, polarWorldAccess, boundedSelector, config, extraChunks, false);
         } catch (Throwable e) {
             return CompletableFuture.failedFuture(e);
         }

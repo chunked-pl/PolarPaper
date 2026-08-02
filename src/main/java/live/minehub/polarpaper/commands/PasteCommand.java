@@ -7,6 +7,7 @@ import com.mojang.brigadier.context.CommandContext;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
 import io.papermc.paper.command.brigadier.Commands;
 import live.minehub.polarpaper.PolarPaper;
+import live.minehub.polarpaper.core.generator.PolarGenerator;
 import live.minehub.polarpaper.core.world.PolarReader;
 import live.minehub.polarpaper.core.world.PolarWorld;
 import live.minehub.polarpaper.schematic.Rotation;
@@ -129,7 +130,10 @@ public class PasteCommand extends PolarCmd {
         Vector3i pasteOffset = player.getLocation().toVector().toVector3i();
 
         try {
-            Setter setter = new Setter.World(player.getWorld());
+            PolarGenerator targetGenerator = PolarGenerator.fromWorld(player.getWorld());
+            Setter setter = targetGenerator == null
+                    ? new Setter.World(player.getWorld())
+                    : new Setter.World(player.getWorld(), targetGenerator.getWorldBlockSelector());
             Schematic.paste(polarWorld, setter, pasteOffset, rotation, ignoreAir);
         } catch (Exception e) {
             String errorMsg = "Failed to paste schematic, please check logs for error";

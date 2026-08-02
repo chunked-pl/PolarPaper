@@ -15,6 +15,7 @@ import org.bukkit.Bukkit;
 import org.bukkit.World;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
+import org.bukkit.scheduler.BukkitTask;
 
 public class UsageCommand extends PolarCmd {
 
@@ -64,13 +65,14 @@ public class UsageCommand extends PolarCmd {
      */
     private static void track(Player player, World world) {
         int[] ticksLeft = {DURATION_TICKS};
+        BukkitTask[] taskHolder = new BukkitTask[1];
 
-        Bukkit.getGlobalRegionScheduler().runAtFixedRate(PolarPaper.getPlugin(), task -> {
+        taskHolder[0] = Bukkit.getScheduler().runTaskTimer(PolarPaper.getPlugin(), () -> {
             ticksLeft[0] -= UPDATE_INTERVAL_TICKS;
 
             // The world can be unloaded, and the player can leave, long before the 30 seconds are up
             if (ticksLeft[0] <= 0 || !player.isOnline() || Bukkit.getWorld(world.getKey()) == null) {
-                task.cancel();
+                taskHolder[0].cancel();
                 return;
             }
 

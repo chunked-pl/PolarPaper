@@ -82,7 +82,10 @@ public class PolarStreamingGenerator extends PolarGenerator {
                 .append(Component.text(" Generator: STREAMING", NamedTextColor.AQUA))
                 .appendNewline()
                 .append(Component.text(" Spawn: ", NamedTextColor.AQUA))
-                .append(Component.text(getConfig().spawnString(), NamedTextColor.AQUA));
+                .append(Component.text(getConfig().spawnString(), NamedTextColor.AQUA))
+                .appendNewline()
+                .append(Component.text(" World radius: ", NamedTextColor.AQUA))
+                .append(Component.text(getConfig().worldRadiusBlocks() + " blocks", NamedTextColor.AQUA));
 
         if (offset != null) {
             builder.appendNewline();

@@ -7,6 +7,7 @@ import io.netty.buffer.Unpooled;
 import live.minehub.polarpaper.core.source.PolarSource;
 import live.minehub.polarpaper.core.userdata.EntityUtil;
 import live.minehub.polarpaper.core.util.ByteArrayUtil;
+import live.minehub.polarpaper.core.util.LightUtil;
 import live.minehub.polarpaper.core.util.PaletteUtil;
 import net.kyori.adventure.key.Key;
 import net.minecraft.nbt.*;
@@ -143,6 +144,70 @@ public class PolarReader {
                 heightmaps,
                 userData
         );
+    }
+
+    /**
+     * Consumes a chunk body without building palettes or section objects. The chunk coordinates must already
+     * have been read. Used by the streaming loader for chunks completely outside the configured world radius.
+     */
+    protected static void skipChunkBody(short version, @NotNull ByteBuf bb, int sectionCount) {
+        for (int i = 0; i < sectionCount; i++) skipSection(version, bb);
+
+        int blockEntityCount = getVarInt(bb);
+        if (blockEntityCount < 0 || blockEntityCount > bb.readableBytes() / 6) {
+            throw new IllegalArgumentException("Invalid block entity count: " + blockEntityCount);
+        }
+        for (int i = 0; i < blockEntityCount; i++) skipBlockEntity(bb);
+
+        if (version == PolarWorld.VERSION_DEPRECATED_ENTITIES) {
+            int entityCount = getVarInt(bb);
+            if (entityCount < 0 || entityCount > bb.readableBytes() / 33) {
+                throw new IllegalArgumentException("Invalid entity count: " + entityCount);
+            }
+            for (int i = 0; i < entityCount; i++) {
+                bb.skipBytes(Double.BYTES * 3 + Float.BYTES * 2);
+                skipByteArray(bb);
+            }
+        }
+
+        skipHeightmaps(bb);
+        skipByteArray(bb);
+    }
+
+    private static void skipSection(short version, @NotNull ByteBuf bb) {
+        if (bb.readByte() == 1) return;
+
+        int blockPaletteLength = skipStringList(bb, MAX_BLOCK_PALETTE_SIZE);
+        if (blockPaletteLength > 1) skipLongArray(bb);
+
+        int biomePaletteLength = skipStringList(bb, MAX_BIOME_PALETTE_SIZE);
+        if (biomePaletteLength > 1) skipLongArray(bb);
+
+        if (readLightContent(version, bb) == PolarSection.LightContent.PRESENT) {
+            skipFixedBytes(bb, LightUtil.LIGHT_LENGTH, "block light");
+        }
+        if (readLightContent(version, bb) == PolarSection.LightContent.PRESENT) {
+            skipFixedBytes(bb, LightUtil.LIGHT_LENGTH, "sky light");
+        }
+    }
+
+    private static void skipBlockEntity(@NotNull ByteBuf bb) {
+        skipFixedBytes(bb, Integer.BYTES, "block entity position");
+        if (bb.readByte() == 1) skipString(bb);
+        if (bb.readByte() != 1) return;
+
+        try (ByteBufInputStream input = new ByteBufInputStream(bb)) {
+            NbtIo.readAnyTag(input, NbtAccounter.unlimitedHeap());
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private static void skipFixedBytes(@NotNull ByteBuf bb, int length, @NotNull String description) {
+        if (bb.readableBytes() < length) {
+            throw new IllegalArgumentException("Invalid " + description + " length: " + bb.readableBytes());
+        }
+        bb.skipBytes(length);
     }
 
     /**

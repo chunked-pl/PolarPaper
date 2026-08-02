@@ -27,6 +27,7 @@ import java.util.function.Function;
  * @param saveOnStop whether to save on shutdown or when using /polar unload
  * @param loadOnStartup whether to load the world when the plugin is enabled
  * @param spawn the spawn location
+ * @param worldRadiusBlocks horizontal radius in blocks around the spawn that is loaded and saved
  * @param difficulty the difficulty
  * @param async whether to create the world asynchronously. Can cause issues with other plugins
  * @param saveLight whether chunks are saved with light data.
@@ -42,6 +43,7 @@ public record Config(
         boolean saveOnStop,
         boolean loadOnStartup,
         @NotNull Location spawn,
+        int worldRadiusBlocks,
         @NotNull Difficulty difficulty,
         boolean async,
         boolean saveLight,
@@ -79,6 +81,9 @@ public record Config(
             new Property<>("saveOnStop", false, Config::saveOnStop, Builder::saveOnStop),
             new Property<>("loadOnStartup", true, Config::loadOnStartup, Builder::loadOnStartup),
             new LocationProperty("spawn", new Location(null, 0, 64, 0), Config::spawn, Builder::spawn),
+            new Property<Number>("worldRadiusBlocks", 570, Config::worldRadiusBlocks,
+                    (builder, number) -> builder.worldRadiusBlocks(number.intValue()),
+                    "Horizontal block radius around spawn; blocks and entities outside it are discarded"),
             new EnumProperty<>(Difficulty.class, "difficulty", Difficulty.NORMAL, Config::difficulty, Builder::difficulty),
             new Property<>("async", false, Config::async, Builder::async, "Experimental, may cause issues with other plugins"),
             new Property<>("saveLight", true, Config::saveLight, Builder::saveLight, "Whether chunks are saved with light data. Reduces load time and CPU usage while loading but increases world size"),
@@ -158,6 +163,7 @@ public record Config(
         private boolean saveOnStop;
         private boolean loadOnStartup;
         private @NotNull Location spawn;
+        private int worldRadiusBlocks;
         private @NotNull Difficulty difficulty;
         private boolean async;
         private boolean saveLight;
@@ -178,6 +184,7 @@ public record Config(
             this.saveOnStop = record.saveOnStop;
             this.loadOnStartup = record.loadOnStartup;
             this.spawn = record.spawn;
+            this.worldRadiusBlocks = record.worldRadiusBlocks;
             this.difficulty = record.difficulty;
             this.async = record.async;
             this.saveLight = record.saveLight;
@@ -255,6 +262,14 @@ public record Config(
             return this;
         }
 
+        public Builder worldRadiusBlocks(int worldRadiusBlocks) {
+            if (worldRadiusBlocks < 1) {
+                throw new IllegalArgumentException("worldRadiusBlocks must be positive: " + worldRadiusBlocks);
+            }
+            this.worldRadiusBlocks = worldRadiusBlocks;
+            return this;
+        }
+
         public Builder difficulty(@NotNull Difficulty difficulty) {
             this.difficulty = Objects.requireNonNull(difficulty, "Null difficulty");
             return this;
@@ -324,7 +339,7 @@ public record Config(
 
         public Config build() {
             return new Config(this.autoSaveIntervalTicks, this.announceAutosave, this.time, this.saveOnStop, this.loadOnStartup,
-                    this.spawn, this.difficulty, this.async, this.saveLight, this.compression, this.compressionLevel,
+                    this.spawn, this.worldRadiusBlocks, this.difficulty, this.async, this.saveLight, this.compression, this.compressionLevel,
                     this.worldType, this.environment, this.gamerules);
         }
 
