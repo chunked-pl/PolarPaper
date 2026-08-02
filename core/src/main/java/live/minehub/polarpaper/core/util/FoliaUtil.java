@@ -7,9 +7,18 @@ import org.bukkit.plugin.Plugin;
 
 public class FoliaUtil {
 
+    private static final boolean FOLIA = detectFolia();
+
+    private FoliaUtil() {
+    }
+
     public static void scheduleOnEntityIfFolia(Plugin plugin, Entity entity, Runnable runnable) {
+        scheduleOnEntityIfFolia(plugin, entity, runnable, () -> {});
+    }
+
+    public static void scheduleOnEntityIfFolia(Plugin plugin, Entity entity, Runnable runnable, Runnable retired) {
         if (isFolia()) {
-            entity.getScheduler().execute(plugin, runnable, null, 1L);
+            if (!entity.getScheduler().execute(plugin, runnable, retired, 1L)) retired.run();
         } else {
             runnable.run();
         }
@@ -24,6 +33,10 @@ public class FoliaUtil {
     }
 
     public static boolean isFolia() {
+        return FOLIA;
+    }
+
+    private static boolean detectFolia() {
         try {
             Class.forName("io.papermc.paper.threadedregions.RegionizedServer");
             return true;

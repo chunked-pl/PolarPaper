@@ -1,8 +1,10 @@
 package live.minehub.polarpaper.core.userdata;
 
+import ca.spottedleaf.moonrise.common.util.TickThread;
 import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import net.minecraft.nbt.CompoundTag;
 import org.bukkit.World;
+import org.bukkit.craftbukkit.entity.CraftEntity;
 import org.bukkit.entity.Entity;
 import org.bukkit.plugin.Plugin;
 import org.jetbrains.annotations.NotNull;
@@ -37,12 +39,21 @@ public interface EntitySerializer {
      * @return whether the entity was saved
      */
     static boolean saveOnEntityThread(@NotNull Entity entity, @NotNull Plugin plugin, @NotNull BooleanSupplier save) {
+        if (TickThread.isTickThreadFor(((CraftEntity) entity).getHandleRaw())) {
+            try {
+                return save.getAsBoolean();
+            } catch (Throwable throwable) {
+                LOGGER.error("Failed to serialize entity {}", entity.getUniqueId(), throwable);
+                return false;
+            }
+        }
+
         CompletableFuture<Boolean> saved = new CompletableFuture<>();
         ScheduledTask task = entity.getScheduler().run(plugin, _ -> {
             try {
                 saved.complete(save.getAsBoolean());
-            } catch (Exception e) {
-                saved.completeExceptionally(e);
+            } catch (Throwable throwable) {
+                saved.completeExceptionally(throwable);
             }
         }, () -> saved.complete(false)); // retired: the entity was removed before the task ran
 
@@ -51,9 +62,14 @@ public interface EntitySerializer {
         try {
             return saved.get(SAVE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         } catch (InterruptedException e) {
+            task.cancel();
             Thread.currentThread().interrupt();
             return false;
-        } catch (ExecutionException | TimeoutException e) {
+        } catch (TimeoutException e) {
+            task.cancel();
+            LOGGER.error("Timed out serializing entity {}", entity.getUniqueId(), e);
+            return false;
+        } catch (ExecutionException e) {
             LOGGER.error("Failed to serialize entity {}", entity.getUniqueId(), e);
             return false;
         }

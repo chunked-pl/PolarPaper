@@ -23,10 +23,19 @@ public class VersionUtil {
         Polar.setLoading(creator.key(), true);
         Plugin plugin = PolarPaper.getPlugin();
         String version = Versioning.getCurrentApiVersion();
-        return switch (version) {
-            case "1.21.11" -> new live.minehub.polarpaper.paper_1_21_11.NoSaveLevelCreatorImpl().createLevel(plugin, creator, spawnPos, difficulty, gamerules, time);
-            default -> new live.minehub.polarpaper.paper_latest.NoSaveLevelCreatorImpl().createLevel(plugin, creator, spawnPos, difficulty, gamerules, time);
-        };
+        try {
+            CompletableFuture<@Nullable World> future = switch (version) {
+                case "1.21.11" -> new live.minehub.polarpaper.paper_1_21_11.NoSaveLevelCreatorImpl().createLevel(plugin, creator, spawnPos, difficulty, gamerules, time);
+                default -> new live.minehub.polarpaper.paper_latest.NoSaveLevelCreatorImpl().createLevel(plugin, creator, spawnPos, difficulty, gamerules, time);
+            };
+            if (future != null) return future;
+
+            Polar.setLoading(creator.key(), false);
+            return CompletableFuture.completedFuture(null);
+        } catch (Throwable throwable) {
+            Polar.setLoading(creator.key(), false);
+            return CompletableFuture.failedFuture(throwable);
+        }
     }
 
     public static EntitiesWorldAccess getPolarFeaturesWorldAccess() {

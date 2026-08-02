@@ -40,52 +40,64 @@ public class EntitySerializerImpl implements EntitySerializer {
     @Override
     public CompletableFuture<byte @Nullable []> entityToBytes(Entity entity, Plugin plugin) {
         CompletableFuture<byte @Nullable []> byteArrayFuture = new CompletableFuture<>();
-        FoliaUtil.scheduleOnEntityIfFolia(plugin, entity, () -> {
-            if (entity.getType() == EntityType.PLAYER) {
-                byteArrayFuture.complete(null);
-                return;
-            }
-            if (!entity.isPersistent()) {
-                byteArrayFuture.complete(null);
-                return;
-            }
-
-            net.minecraft.world.entity.Entity nmsEntity = ((CraftEntity) entity).getHandle();
-            ProblemReporter.ScopedCollector problemReporter = new ProblemReporter.ScopedCollector(() -> "serialiseEntity@" + entity.getUniqueId(), LogUtils.getLogger());
-            TagValueOutput tagValueOutput = TagValueOutput.createWithContext(problemReporter, nmsEntity.registryAccess());
-
-            boolean successful;
-            try {
-                successful = nmsEntity.saveAsPassenger(tagValueOutput, true, false, false);
-            } catch (Exception e) {
-                // saveAsPassenger sometimes calls events (e.g. VillagerAcquireTradeEvent), causing errors when called async so try again synchronously
-                successful = EntitySerializer.saveOnEntityThread(entity, plugin,
-                        () -> nmsEntity.saveAsPassenger(tagValueOutput, true, false, false));
-            }
-
-            CompoundTag compound = tagValueOutput.buildResult();
-
-            Optional<String> id = compound.getString("id");
-            if (id.isEmpty() || id.get().isBlank() || !successful) {
-                byteArrayFuture.complete(null);
-                return;
-            }
-            compound.putInt("DataVersion", SharedConstants.getCurrentVersion().dataVersion().version());
-            ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
-            DataOutputStream dataOutput = new DataOutputStream(outputStream);
-            try {
-                NbtIo.write(
-                        compound,
-                        dataOutput
-                );
-                outputStream.flush();
-            } catch (IOException ex) {
-                throw new RuntimeException(ex);
-            }
-
-            byteArrayFuture.complete(outputStream.toByteArray());
-        });
+        try {
+            FoliaUtil.scheduleOnEntityIfFolia(plugin, entity, () -> {
+                try {
+                    serializeEntity(entity, plugin, byteArrayFuture);
+                } catch (Throwable throwable) {
+                    byteArrayFuture.completeExceptionally(throwable);
+                }
+            }, () -> byteArrayFuture.complete(null));
+        } catch (Throwable throwable) {
+            byteArrayFuture.completeExceptionally(throwable);
+        }
 
         return byteArrayFuture;
+    }
+
+    private void serializeEntity(Entity entity, Plugin plugin, CompletableFuture<byte @Nullable []> byteArrayFuture) {
+        if (entity.getType() == EntityType.PLAYER) {
+            byteArrayFuture.complete(null);
+            return;
+        }
+        if (!entity.isPersistent()) {
+            byteArrayFuture.complete(null);
+            return;
+        }
+
+        net.minecraft.world.entity.Entity nmsEntity = ((CraftEntity) entity).getHandle();
+        ProblemReporter.ScopedCollector problemReporter = new ProblemReporter.ScopedCollector(() -> "serialiseEntity@" + entity.getUniqueId(), LogUtils.getLogger());
+        TagValueOutput tagValueOutput = TagValueOutput.createWithContext(problemReporter, nmsEntity.registryAccess());
+
+        boolean successful;
+        try {
+            successful = nmsEntity.saveAsPassenger(tagValueOutput, true, false, false);
+        } catch (Exception e) {
+            // saveAsPassenger sometimes calls events (e.g. VillagerAcquireTradeEvent), causing errors when called async so try again synchronously
+            successful = EntitySerializer.saveOnEntityThread(entity, plugin,
+                    () -> nmsEntity.saveAsPassenger(tagValueOutput, true, false, false));
+        }
+
+        CompoundTag compound = tagValueOutput.buildResult();
+
+        Optional<String> id = compound.getString("id");
+        if (id.isEmpty() || id.get().isBlank() || !successful) {
+            byteArrayFuture.complete(null);
+            return;
+        }
+        compound.putInt("DataVersion", SharedConstants.getCurrentVersion().dataVersion().version());
+        ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+        DataOutputStream dataOutput = new DataOutputStream(outputStream);
+        try {
+            NbtIo.write(
+                    compound,
+                    dataOutput
+            );
+            outputStream.flush();
+        } catch (IOException ex) {
+            throw new RuntimeException(ex);
+        }
+
+        byteArrayFuture.complete(outputStream.toByteArray());
     }
 }

@@ -50,7 +50,11 @@ import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.lang.invoke.VarHandle;
+import java.util.ArrayList;
+import java.util.EnumSet;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 
 import static live.minehub.polarpaper.core.util.ByteArrayUtil.getVarInt;
 
@@ -150,27 +154,39 @@ public class PolarStreamLoader {
         // User (world) data
         byte[] userData = new byte[0];
         if (version > PolarConstants.VERSION_WORLD_USERDATA) {
-            int userDataLength = getVarInt(uncompressed);
-            byte[] bytes = new byte[userDataLength];
-            uncompressed.readBytes(bytes);
-            userData = bytes;
+            userData = live.minehub.polarpaper.core.util.ByteArrayUtil.getByteArray(uncompressed);
         }
 
         voidGenerator.setUserData(userData);
 
         int chunkCount = getVarInt(uncompressed);
-        CompletableFuture<Void>[] futures = new CompletableFuture[chunkCount];
+        validateChunkCount(chunkCount, uncompressed, maxSection - minSection + 1);
+
+        List<CompletableFuture<Void>> futures = new ArrayList<>(chunkCount);
+        Throwable readFailure = null;
         for (int i = 0; i < chunkCount; i++) {
             try {
                 CompletableFuture<Void> future = readChunk(worldAccess.getPlugin(), world, dataConverter, worldAccess, version, dataVersion, uncompressed, maxSection - minSection + 1);
                 if (future.isCompletedExceptionally()) throw future.exceptionNow();
-                futures[i] = future;
+                futures.add(future);
             } catch (Throwable e) {
-                return CompletableFuture.failedFuture(e);
+                readFailure = e;
+                break;
             }
         }
 
-        return CompletableFuture.allOf(futures);
+        CompletableFuture<Void> scheduledChunks = CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new));
+        if (readFailure == null) return scheduledChunks;
+
+        // Some chunks may already be queued on region threads. Do not report failure (and let the caller unload
+        // the world) until those tasks have stopped touching it.
+        Throwable finalReadFailure = readFailure;
+        return scheduledChunks.handle((_, scheduledFailure) -> {
+            if (scheduledFailure != null && scheduledFailure != finalReadFailure) {
+                finalReadFailure.addSuppressed(scheduledFailure);
+            }
+            throw new CompletionException(finalReadFailure);
+        });
     }
 
     private static CompletableFuture<Void> readChunk(Plugin plugin, World world, @NotNull PolarDataConverter dataConverter, @NotNull PolarWorldAccess worldAccess, short version, int dataVersion, @NotNull ByteBuf bb, int sectionCount) {
@@ -212,21 +228,32 @@ public class PolarStreamLoader {
         PolarReader.skipHeightmaps(bb);
 
         // Objects
-        int userDataLength = getVarInt(bb);
-        byte[] userData = new byte[userDataLength];
-        bb.readBytes(userData);
+        byte[] userData = live.minehub.polarpaper.core.util.ByteArrayUtil.getByteArray(bb);
 
-        return TaskFutures.runRegion(plugin, world, chunkX, chunkZ, () -> {
-            insertChunk(serverLevel, newLevelChunk);
-            worldAccess.loadChunkData(world, newLevelChunk, userData);
-            chunkLight.applyTo(serverLevel, newLevelChunk);
-            return null;
-        });
+        return prepareChunkAsync(newLevelChunk).thenCompose(_ ->
+                TaskFutures.runRegion(plugin, world, chunkX, chunkZ, () -> {
+                    insertChunk(serverLevel, newLevelChunk);
+                    worldAccess.loadChunkData(world, newLevelChunk, userData);
+                    chunkLight.applyTo(serverLevel, newLevelChunk);
+                    return null;
+                }));
+    }
+
+    /**
+     * Builds the heightmaps before a chunk is made visible to the world. Keeping this work asynchronous retains
+     * loading throughput, while awaiting it prevents a data race with chunk ticking and packet creation.
+     */
+    public static CompletableFuture<Void> prepareChunkAsync(LevelChunk chunk) {
+        return CompletableFuture.runAsync(() -> primeMissingHeightmaps(chunk));
     }
 
     public static void insertChunk(ServerLevel serverLevel, NoUnloadLevelChunk newLevelChunk) {
         int chunkX = newLevelChunk.locX;
         int chunkZ = newLevelChunk.locZ;
+
+        // Usually already done by prepareChunkAsync. This cheap missing-only check keeps direct callers safe too.
+        primeMissingHeightmaps(newLevelChunk);
+
         ChunkTaskScheduler chunkTaskScheduler = serverLevel.moonrise$getChunkTaskScheduler();
         ChunkHolderManager chunkHolderManager = chunkTaskScheduler.chunkHolderManager;
 
@@ -260,14 +287,6 @@ public class PolarStreamLoader {
             }
         }
 
-        // Only the heightmaps a full chunk is meant to have, which is what vanilla primes when loading one.
-        // The two worldgen only types are not part of a loaded chunk, and getHeight() primes on demand anyway.
-        CompletableFuture.runAsync(() -> Heightmap.primeHeightmaps(newLevelChunk, ChunkStatus.FULL.heightmapsAfter()))
-                .exceptionally(e -> {
-                    LOGGER.error("Failed to prime heightmaps for chunk at {} {}", chunkX, chunkZ, e);
-                    return null;
-                });
-
         newLevelChunk.setFullStatus(() -> FullChunkStatus.ENTITY_TICKING);
         newLevelChunk.runPostLoad();
         newLevelChunk.setLoaded(true);
@@ -295,6 +314,22 @@ public class PolarStreamLoader {
         holder.world.moonrise$getEntityLookup().entitySectionLoad(holder.chunkX, holder.chunkZ, slices);
 
         return slices;
+    }
+
+    private static void primeMissingHeightmaps(LevelChunk chunk) {
+        EnumSet<Heightmap.Types> missing = EnumSet.noneOf(Heightmap.Types.class);
+        missing.addAll(ChunkStatus.FULL.heightmapsAfter());
+        missing.removeIf(chunk::hasPrimedHeightmap);
+        Heightmap.primeHeightmaps(chunk, missing);
+    }
+
+    private static void validateChunkCount(int chunkCount, ByteBuf data, int sectionCount) {
+        // Every chunk contains two coordinates, one marker per section, a block-entity count, a heightmap mask
+        // and a userdata length. This lower bound rejects corrupt counts before they can allocate a huge list.
+        int minimumChunkBytes = sectionCount + Integer.BYTES + 4;
+        if (chunkCount < 0 || chunkCount > data.readableBytes() / minimumChunkBytes) {
+            throw new IllegalArgumentException("Invalid chunk count: " + chunkCount);
+        }
     }
 
     public static void addBlockEntity(PolarChunk.BlockEntity polarBlockEntity, ChunkAccess chunk) {
@@ -338,7 +373,7 @@ public class PolarStreamLoader {
 
     @Contract("false, _ -> fail")
     private static void assertThat(boolean condition, @NotNull String message) {
-        if (!condition) throw new Error(message);
+        if (!condition) throw new IllegalArgumentException(message);
     }
 
 

@@ -22,6 +22,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class BlockStateCodec {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(BlockStateCodec.class);
+    private static final int MAX_PARSED_STATE_CACHE_SIZE = 65_536;
 
     private static final Map<String, BlockState> STATES_BY_PALETTE_STRING = new ConcurrentHashMap<>();
     private static final Map<BlockState, String> PALETTE_STRINGS_BY_STATE = new ConcurrentHashMap<>();
@@ -35,7 +36,16 @@ public final class BlockStateCodec {
      * An unparsable string is only reported once, as the same string reappears in section after section.
      */
     public static @NotNull BlockState fromPaletteString(@NotNull String paletteString) {
-        return STATES_BY_PALETTE_STRING.computeIfAbsent(paletteString, BlockStateCodec::parse);
+        BlockState cached = STATES_BY_PALETTE_STRING.get(paletteString);
+        if (cached != null) return cached;
+
+        BlockState parsed = parse(paletteString);
+        // Canonical strings produced by Polar are bounded by the game's states. The cap also keeps malformed or
+        // third-party files with endlessly distinct strings from turning this server-wide cache into a leak.
+        if (STATES_BY_PALETTE_STRING.size() >= MAX_PARSED_STATE_CACHE_SIZE) return parsed;
+
+        BlockState previous = STATES_BY_PALETTE_STRING.putIfAbsent(paletteString, parsed);
+        return previous == null ? parsed : previous;
     }
 
     /**

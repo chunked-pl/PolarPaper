@@ -21,15 +21,15 @@ public class ByteArrayUtil {
 
     public static byte[] getByteArray(ByteBuf bb) {
         int packedLength = getVarInt(bb);
+        requireReadableLength(bb, packedLength, 1, "byte array");
         byte[] bytes = new byte[packedLength];
-        for (int i = 0; i < packedLength; i++) {
-            bytes[i] = bb.readByte();
-        }
+        bb.readBytes(bytes);
         return bytes;
     }
 
     public static long[] getLongArray(ByteBuf bb) {
         int packedLength = getVarInt(bb);
+        requireReadableLength(bb, packedLength, Long.BYTES, "long array");
         long[] longs = new long[packedLength];
         for (int i = 0; i < packedLength; i++) {
             longs[i] = bb.readLong();
@@ -39,38 +39,21 @@ public class ByteArrayUtil {
 
     // Copyright 2019 Google LLC
     public static int getVarInt(ByteBuf bb) {
-        int tmp;
-        if ((tmp = bb.readByte()) >= 0) {
-            return tmp;
-        }
-        int result = tmp & 0x7f;
-        if ((tmp = bb.readByte()) >= 0) {
-            result |= tmp << 7;
-        } else {
-            result |= (tmp & 0x7f) << 7;
-            if ((tmp = bb.readByte()) >= 0) {
-                result |= tmp << 14;
-            } else {
-                result |= (tmp & 0x7f) << 14;
-                if ((tmp = bb.readByte()) >= 0) {
-                    result |= tmp << 21;
-                } else {
-                    result |= (tmp & 0x7f) << 21;
-                    result |= (tmp = bb.readByte()) << 28;
-                    while (tmp < 0) {
-                        // We get into this loop only in the case of overflow.
-                        // By doing this, we can call getVarInt() instead of
-                        // getVarLong() when we only need an int.
-                        tmp = bb.readByte();
-                    }
-                }
+        int result = 0;
+        for (int position = 0; position < Integer.BYTES + 1; position++) {
+            byte current = bb.readByte();
+            if (position == Integer.BYTES && (current & 0xf0) != 0) {
+                throw new IllegalArgumentException("VarInt exceeds 32 bits");
             }
+            result |= (current & 0x7f) << (position * 7);
+            if (current >= 0) return result;
         }
-        return result;
+        throw new IllegalArgumentException("VarInt is longer than 5 bytes");
     }
 
     public static @NotNull String getString(ByteBuf bb) {
         int length = getVarInt(bb);
+        requireReadableLength(bb, length, 1, "string");
         byte[] bytes = new byte[length];
         bb.readBytes(bytes);
         return new String(bytes, StandardCharsets.UTF_8);
@@ -82,7 +65,9 @@ public class ByteArrayUtil {
     }
     public static String[] getStringList(ByteBuf bb, int maxSize) {
         int length = getVarInt(bb);
-//        assertThat(length <= maxSize, "String list too big");
+        if (length < 0 || length > maxSize || length > bb.readableBytes()) {
+            throw new IllegalArgumentException("Invalid string list length: " + length);
+        }
         String[] strings = new String[length];
         for (int i = 0; i < length; i++) {
             strings[i] = getString(bb);
@@ -157,6 +142,12 @@ public class ByteArrayUtil {
         writeVarInt(strings.length, bb);
         for (String aString : strings) {
             writeString(aString, bb);
+        }
+    }
+
+    private static void requireReadableLength(ByteBuf bb, int length, int elementBytes, String description) {
+        if (length < 0 || length > bb.readableBytes() / elementBytes) {
+            throw new IllegalArgumentException("Invalid " + description + " length: " + length);
         }
     }
 

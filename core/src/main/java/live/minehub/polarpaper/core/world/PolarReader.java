@@ -78,13 +78,11 @@ public class PolarReader {
         // User (world) data
         byte[] userData = new byte[0];
         if (version > PolarWorld.VERSION_WORLD_USERDATA) {
-            int userDataLength = getVarInt(uncompressed);
-            byte[] bytes = new byte[userDataLength];
-            uncompressed.readBytes(bytes);
-            userData = bytes;
+            userData = getByteArray(uncompressed);
         }
 
         int chunkCount = getVarInt(uncompressed);
+        validateChunkCount(chunkCount, uncompressed, maxSection - minSection + 1);
         List<PolarChunk> chunks = new ArrayList<>(chunkCount);
         for (int i = 0; i < chunkCount; i++) {
             chunks.add(readChunk(dataConverter, version, dataVersion, uncompressed, maxSection - minSection + 1));
@@ -128,9 +126,7 @@ public class PolarReader {
         var heightmaps = readHeightmaps(bb);
 
         // Objects
-        int userDataLength = getVarInt(bb);
-        byte[] userData = new byte[userDataLength];
-        bb.readBytes(userData);
+        byte[] userData = getByteArray(bb);
 
         if (entities != null) {
             ByteBuf newData = Unpooled.buffer();
@@ -161,6 +157,9 @@ public class PolarReader {
             if ((heightmapMask & (1 << i)) == 0) continue;
 
             int packedLength = getVarInt(bb);
+            if (packedLength < 0 || packedLength > bb.readableBytes() / Long.BYTES) {
+                throw new IllegalArgumentException("Invalid heightmap length: " + packedLength);
+            }
             bb.skipBytes(packedLength * Long.BYTES);
         }
     }
@@ -229,7 +228,13 @@ public class PolarReader {
     }
 
     private static PolarSection.@NotNull LightContent readLightContent(short version, @NotNull ByteBuf bb) {
-        if (version >= PolarWorld.VERSION_IMPROVED_LIGHT) return PolarSection.LightContent.VALUES[bb.readByte()];
+        if (version >= PolarWorld.VERSION_IMPROVED_LIGHT) {
+            int id = bb.readUnsignedByte();
+            if (id >= PolarSection.LightContent.VALUES.length) {
+                throw new IllegalArgumentException("Invalid light content: " + id);
+            }
+            return PolarSection.LightContent.VALUES[id];
+        }
         return bb.readByte() == 1 ? PolarSection.LightContent.PRESENT : PolarSection.LightContent.MISSING;
     }
 
@@ -288,12 +293,11 @@ public class PolarReader {
     }
 
     protected static @NotNull ByteBuf decompressBuffer(@NotNull ByteBuf buffer, @NotNull PolarWorld.CompressionType compression, int compressedLength) {
+        assertThat(compressedLength >= 0, "Invalid uncompressed length: " + compressedLength);
         return switch (compression) {
             case NONE -> Unpooled.wrappedBuffer(buffer);
             case ZSTD -> {
-                int limit = buffer.capacity();
-                int length = limit - buffer.readerIndex();
-                assertThat(length >= 0, "Invalid remaining: " + length);
+                int length = buffer.readableBytes();
 
                 byte[] bytes = new byte[length];
                 buffer.readBytes(bytes);
@@ -307,7 +311,14 @@ public class PolarReader {
 
     @Contract("false, _ -> fail")
     private static void assertThat(boolean condition, @NotNull String message) {
-        if (!condition) throw new Error(message);
+        if (!condition) throw new IllegalArgumentException(message);
+    }
+
+    private static void validateChunkCount(int chunkCount, ByteBuf data, int sectionCount) {
+        int minimumChunkBytes = sectionCount + Integer.BYTES + 4;
+        if (chunkCount < 0 || chunkCount > data.readableBytes() / minimumChunkBytes) {
+            throw new IllegalArgumentException("Invalid chunk count: " + chunkCount);
+        }
     }
 
 

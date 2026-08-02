@@ -78,6 +78,7 @@ public record PolarChunk(
     }
 
     public boolean isEmpty() {
+        if (blockEntities.length != 0 || userData.length != 0) return false;
         for (PolarSection section : sections) {
             if (!section.isEmpty()) return false;
         }
@@ -86,7 +87,7 @@ public record PolarChunk(
 
     public PolarChunk(int x, int z, int sectionCount) {
         // Blank chunk
-        this(x, z, new PolarSection[sectionCount], new BlockEntity[0], new int[PolarChunk.MAX_HEIGHTMAPS][0], new byte[0]);
+        this(x, z, new PolarSection[sectionCount], new BlockEntity[0], new int[PolarChunk.MAX_HEIGHTMAPS][], new byte[0]);
         Arrays.setAll(sections, _ -> new PolarSection());
     }
 
@@ -224,51 +225,67 @@ public record PolarChunk(
         Map<BlockPos, net.minecraft.world.level.block.entity.BlockEntity> blockEntities = new HashMap<>();
 
         CompletableFuture<Void> future = new CompletableFuture<>();
-        FoliaUtil.scheduleOnRegionIfFolia(worldAccess.getPlugin(), world, chunkX, chunkZ, () -> {
-            for (BlockPos blockPos : chunkAccess.getBlockEntitiesPos()) {
-                net.minecraft.world.level.block.entity.BlockEntity blockEntity = chunkAccess.getBlockEntity(blockPos);
+        try {
+            FoliaUtil.scheduleOnRegionIfFolia(worldAccess.getPlugin(), world, chunkX, chunkZ, () -> {
+                try {
+                    for (BlockPos blockPos : chunkAccess.getBlockEntitiesPos()) {
+                        net.minecraft.world.level.block.entity.BlockEntity blockEntity = chunkAccess.getBlockEntity(blockPos);
 
-                if (blockEntity == null) continue;
-                if (!blockSelector.test(blockPos.getX(), blockPos.getY(), blockPos.getZ())) continue;
+                        if (blockEntity == null) continue;
+                        if (!blockSelector.test(blockPos.getX(), blockPos.getY(), blockPos.getZ())) continue;
 
-                CompoundTag compoundTag = blockEntity.saveWithFullMetadata(registryAccess);
+                        CompoundTag compoundTag = blockEntity.saveWithFullMetadata(registryAccess);
 
-                Optional<String> id = compoundTag.getString("id");
-                if (id.isEmpty()) {
-                    LOGGER.warn("No ID in block entity data at: {}", blockPos);
-                    LOGGER.warn("Compound tag: {}", compoundTag);
-                    continue;
+                        Optional<String> id = compoundTag.getString("id");
+                        if (id.isEmpty()) {
+                            LOGGER.warn("No ID in block entity data at: {}", blockPos);
+                            LOGGER.warn("Compound tag: {}", compoundTag);
+                            continue;
+                        }
+
+                        int index = CoordConversion.chunkBlockIndex(blockPos.getX(), blockPos.getY(), blockPos.getZ());
+                        polarBlockEntities.add(new BlockEntity(index, id.get(), compoundTag));
+                        blockEntities.put(blockPos, blockEntity);
+                    }
+
+                    future.complete(null);
+                } catch (Throwable throwable) {
+                    future.completeExceptionally(throwable);
                 }
-
-                int index = CoordConversion.chunkBlockIndex(blockPos.getX(), blockPos.getY(), blockPos.getZ());
-                polarBlockEntities.add(new BlockEntity(index, id.get(), compoundTag));
-                blockEntities.put(blockPos, blockEntity);
-            }
-
-            future.complete(null);
-        });
-
-        int[][] heightMaps = new int[PolarChunk.MAX_HEIGHTMAPS][0];
-        worldAccess.saveHeightmaps(chunkAccess, heightMaps);
-
-        ByteBuf userDataOutput = Unpooled.buffer();
-        List<net.minecraft.world.entity.Entity> allEntities = entityChunk == null ? List.of() : entityChunk.getAllEntities();
-        List<org.bukkit.entity.Entity> newAllEntities = new ArrayList<>();
-        for (net.minecraft.world.entity.Entity ent : allEntities) {
-            if (blockSelector.test(ent.getBlockX(), ent.getBlockY(), ent.getBlockZ())) newAllEntities.add(ent.getBukkitEntity());
+            });
+        } catch (Throwable throwable) {
+            future.completeExceptionally(throwable);
         }
-        org.bukkit.entity.Entity[] entitiesArray = newAllEntities.toArray(new org.bukkit.entity.Entity[0]);
-        worldAccess.saveChunkData(chunkAccess, blockEntities, entitiesArray, userDataOutput);
-        byte[] userData = ByteArrayUtil.outputArray(userDataOutput);
 
-        return future.thenApply(_ -> new PolarChunk(
-                chunkX,
-                chunkZ,
-                sections,
-                polarBlockEntities.toArray(new BlockEntity[0]),
-                heightMaps,
-                userData
-        )).exceptionally(e -> {
+        Function<Void, PolarChunk> finishConversion = _ -> {
+            int[][] heightMaps = new int[PolarChunk.MAX_HEIGHTMAPS][];
+            worldAccess.saveHeightmaps(chunkAccess, heightMaps);
+
+            ByteBuf userDataOutput = Unpooled.buffer();
+            List<net.minecraft.world.entity.Entity> allEntities = entityChunk == null ? List.of() : entityChunk.getAllEntities();
+            List<org.bukkit.entity.Entity> newAllEntities = new ArrayList<>();
+            for (net.minecraft.world.entity.Entity ent : allEntities) {
+                if (blockSelector.test(ent.getBlockX(), ent.getBlockY(), ent.getBlockZ())) newAllEntities.add(ent.getBukkitEntity());
+            }
+            org.bukkit.entity.Entity[] entitiesArray = newAllEntities.toArray(new org.bukkit.entity.Entity[0]);
+            worldAccess.saveChunkData(chunkAccess, blockEntities, entitiesArray, userDataOutput);
+            byte[] userData = ByteArrayUtil.outputArray(userDataOutput);
+
+            return new PolarChunk(
+                    chunkX,
+                    chunkZ,
+                    sections,
+                    polarBlockEntities.toArray(new BlockEntity[0]),
+                    heightMaps,
+                    userData
+            );
+        };
+
+        // A Folia region task must not block while entity serialization schedules work back onto entity threads.
+        CompletableFuture<PolarChunk> converted = FoliaUtil.isFolia()
+                ? future.thenApplyAsync(finishConversion)
+                : future.thenApply(finishConversion);
+        return converted.exceptionally(e -> {
             LOGGER.error("Failed to convert chunk", e);
             return null;
         });

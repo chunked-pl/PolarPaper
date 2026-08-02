@@ -28,6 +28,7 @@ import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArraySet;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 @SuppressWarnings("unused")
 public class Polar {
@@ -169,14 +170,8 @@ public class Polar {
                 streamed = CompletableFuture.failedFuture(t);
             }
 
-            // The world exists from here on, so it must stop counting as loading even if streaming failed
-            return streamed.handle((_, ex) -> {
-                finishLoading(world, config);
-                if (ex == null) return world;
-
-                LOGGER.error("Failed to load world " + worldName, ex);
-                return null;
-            });
+            return streamed.handle((_, ex) -> ex)
+                    .thenCompose(ex -> finishOrAbortLoading(world, config, worldName, ex));
         });
     }
 
@@ -194,29 +189,43 @@ public class Polar {
             if (world == null) return CompletableFuture.completedFuture(null);
             ServerLevel level = ((CraftWorld) world).getHandle();
             List<CompletableFuture<Void>> futures = new ArrayList<>();
+            Throwable preparationFailure = null;
             for (PolarChunk chunk : polarWorld.chunks()) {
-                NoUnloadLevelChunk levelChunk = chunk.createLevelChunk(level);
+                try {
+                    NoUnloadLevelChunk levelChunk = chunk.createLevelChunk(level);
 
-                futures.add(TaskFutures.runSync(PolarPaper.getPlugin(), () -> {
-                    for (PolarChunk.BlockEntity blockEntity : chunk.blockEntities()) {
-                        PolarStreamLoader.addBlockEntity(blockEntity, levelChunk);
-                    }
-                    PolarStreamLoader.insertChunk(level, levelChunk);
-                    worldAccess.loadChunkData(world, levelChunk, chunk.userData());
-                    return true;
-                }).handle((success, ex) -> {
-                    if (ex != null) {
-                        LOGGER.error("Failed to stream chunks in " + worldName, ex);
-                        return null;
-                    }
-                    return null;
-                }));
+                    futures.add(PolarStreamLoader.prepareChunkAsync(levelChunk)
+                            .thenCompose(_ -> TaskFutures.runRegion(PolarPaper.getPlugin(), world, chunk.x(), chunk.z(), () -> {
+                                for (PolarChunk.BlockEntity blockEntity : chunk.blockEntities()) {
+                                    PolarStreamLoader.addBlockEntity(blockEntity, levelChunk);
+                                }
+                                PolarStreamLoader.insertChunk(level, levelChunk);
+                                worldAccess.loadChunkData(world, levelChunk, chunk.userData());
+                                return (Void) null;
+                            }))
+                            .whenComplete((_, ex) -> {
+                                if (ex != null) LOGGER.error("Failed to stream chunk at {} {} in {}", chunk.x(), chunk.z(), worldName, ex);
+                            }));
+                } catch (Throwable throwable) {
+                    preparationFailure = throwable;
+                    break;
+                }
             }
 
-            return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).thenApply(_ -> world);
-        }).whenComplete((world, ex) -> {
-            if (world != null) finishLoading(world, config);
-            if (ex != null) LOGGER.error("Failed to load world " + worldName, ex);
+            CompletableFuture<Void> streamed = CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new));
+            if (preparationFailure != null) {
+                Throwable finalPreparationFailure = preparationFailure;
+                streamed = streamed.handle((_, scheduledFailure) -> {
+                    if (scheduledFailure != null && scheduledFailure != finalPreparationFailure) {
+                        finalPreparationFailure.addSuppressed(scheduledFailure);
+                    }
+                    throw new java.util.concurrent.CompletionException(finalPreparationFailure);
+                });
+            }
+
+            return streamed
+                    .handle((_, ex) -> ex)
+                    .thenCompose(ex -> finishOrAbortLoading(world, config, worldName, ex));
         });
     }
 
@@ -226,6 +235,32 @@ public class Polar {
     private static void finishLoading(@NotNull World world, @NotNull Config config) {
         setLoading(world.getKey(), false);
         startAutoSaveTask(world, config);
+    }
+
+    /**
+     * A partially streamed world is not safe to use. All chunk tasks have settled before this is called, so it
+     * can be unloaded without racing tasks that still hold its level and chunks.
+     */
+    private static CompletableFuture<@Nullable World> finishOrAbortLoading(@NotNull World world, @NotNull Config config,
+                                                                           @NotNull String worldName, @Nullable Throwable failure) {
+        if (failure == null) {
+            finishLoading(world, config);
+            return CompletableFuture.completedFuture(world);
+        }
+
+        setLoading(world.getKey(), false);
+        stopAutoSaveTask(world.getKey());
+        LOGGER.error("Failed to load world {}, unloading the partial world", worldName, failure);
+
+        return TaskFutures.runSync(PolarPaper.getPlugin(), () -> Bukkit.unloadWorld(world, false))
+                .handle((unloaded, unloadFailure) -> {
+                    if (unloadFailure != null) {
+                        LOGGER.error("Failed to unload partial world {}", worldName, unloadFailure);
+                    } else if (!unloaded) {
+                        LOGGER.error("Failed to unload partial world {} because it is still in use", worldName);
+                    }
+                    return null;
+                });
     }
 
     /**
@@ -292,8 +327,20 @@ public class Polar {
         stopAutoSaveTask(world.getKey());
 
         if (autosaveIntervalTicks == -1) return;
+        if (autosaveIntervalTicks < 1) {
+            LOGGER.warn("Autosave for '{}' is disabled because its interval is {} (expected -1 or a positive value)",
+                    world.getKey().getKey(), autosaveIntervalTicks);
+            return;
+        }
+
+        AtomicBoolean saveInProgress = new AtomicBoolean();
 
         ScheduledTask autosaveTask = Bukkit.getGlobalRegionScheduler().runAtFixedRate(PolarPaper.getPlugin(), t -> {
+            if (!saveInProgress.compareAndSet(false, true)) {
+                LOGGER.warn("Skipping autosave for '{}' because the previous save is still running", world.getKey().getKey());
+                return;
+            }
+
             long before = System.nanoTime();
             String savingMsg = String.format("Autosaving '%s'...", world.getKey().getKey());
             LOGGER.info(savingMsg);
@@ -302,27 +349,33 @@ public class Polar {
                 plr.sendMessage(Component.text(savingMsg, NamedTextColor.AQUA));
             }
 
-            updateConfig(world, world.getKey().getKey()); // config should only be updated synchronously
-            saveWorld(world)
-                    .whenComplete((_, e) -> {
-                        if (e != null) {
-                            String errorMsg = String.format("Failed to save '%s', please check logs for error", world.getKey().getKey());
-                            LOGGER.error(errorMsg, e);
-                            for (Player plr : Bukkit.getOnlinePlayers()) {
-                                if (!plr.hasPermission("polar.notifications")) continue;
-                                plr.sendMessage(Component.text(errorMsg, NamedTextColor.RED));
+            try {
+                updateConfig(world, world.getKey().getKey()); // config should only be updated synchronously
+                saveWorld(world)
+                        .whenComplete((_, e) -> {
+                            saveInProgress.set(false);
+                            if (e != null) {
+                                String errorMsg = String.format("Failed to save '%s', please check logs for error", world.getKey().getKey());
+                                LOGGER.error(errorMsg, e);
+                                for (Player plr : Bukkit.getOnlinePlayers()) {
+                                    if (!plr.hasPermission("polar.notifications")) continue;
+                                    plr.sendMessage(Component.text(errorMsg, NamedTextColor.RED));
+                                }
+                                return;
                             }
-                            return;
-                        }
 
-                        int ms = (int) ((System.nanoTime() - before) / 1_000_000);
-                        String savedMsg = String.format("Saved '%s' in %sms", world.getKey().getKey(), ms);
-                        LOGGER.info(savedMsg);
-                        if (announceAutosave) for (Player plr : Bukkit.getOnlinePlayers()) {
-                            if (!plr.hasPermission("polar.notifications")) continue;
-                            plr.sendMessage(Component.text(savedMsg, NamedTextColor.AQUA));
-                        }
-                    });
+                            int ms = (int) ((System.nanoTime() - before) / 1_000_000);
+                            String savedMsg = String.format("Saved '%s' in %sms", world.getKey().getKey(), ms);
+                            LOGGER.info(savedMsg);
+                            if (announceAutosave) for (Player plr : Bukkit.getOnlinePlayers()) {
+                                if (!plr.hasPermission("polar.notifications")) continue;
+                                plr.sendMessage(Component.text(savedMsg, NamedTextColor.AQUA));
+                            }
+                        });
+            } catch (Throwable throwable) {
+                saveInProgress.set(false);
+                LOGGER.error("Failed to start autosave for '{}'", world.getKey().getKey(), throwable);
+            }
         }, autosaveIntervalTicks, autosaveIntervalTicks);
 
         AUTOSAVE_TASK_MAP.put(world.getKey(), autosaveTask);
@@ -429,7 +482,7 @@ public class Polar {
         CompletableFuture<PolarWorld> future;
         try {
             future = PolarWorld.convert(world, polarWorldAccess, blockSelector, config, extraChunks, false);
-        } catch (Exception e) {
+        } catch (Throwable e) {
             return CompletableFuture.failedFuture(e);
         }
 

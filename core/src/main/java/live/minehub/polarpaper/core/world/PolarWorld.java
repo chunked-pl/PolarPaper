@@ -167,7 +167,7 @@ public class PolarWorld {
     }
 
     public @NotNull List<PolarChunk> nonEmptyChunks() {
-        List<PolarChunk> nonEmptyChunks = new ArrayList<>();
+        List<PolarChunk> nonEmptyChunks = new ArrayList<>(chunks.size());
         for (PolarChunk chunk : chunks()) {
             if (chunk.isEmpty()) continue;
             nonEmptyChunks.add(chunk);
