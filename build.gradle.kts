@@ -30,9 +30,7 @@ dependencies {
 
 tasks {
     runServer {
-//        minecraftVersion(libs.versions.minecraft.get())
-        minecraftVersion("1.21.11")
-//        minecraftVersion("26.1.2")
+        minecraftVersion(libs.versions.minecraft.get())
     }
 
     shadowJar {
