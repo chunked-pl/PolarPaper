@@ -93,6 +93,9 @@ public class UsageCommand extends PolarCmd {
                 .append(field("light", formatBytes(usage.lightBytes())))
                 .append(field("blocks", formatBytes(usage.blockBytes() + usage.biomeBytes() + usage.heightmapBytes())))
                 .append(field("objects", formatBytes(usage.overheadBytes())))
+                .append(usage.hasArchive()
+                        ? field("archived", usage.archivedChunks() + " chunks, " + formatBytes(usage.archivedBytes()))
+                        : Component.empty())
                 // Shown alongside so that a panel reading several hundred megabytes is not a surprise: most of
                 // the heap is the server itself, plus whatever garbage the last collection has not taken yet
                 .append(field("server heap", formatBytes(heapUsed) + " / " + formatBytes(runtime.maxMemory())))

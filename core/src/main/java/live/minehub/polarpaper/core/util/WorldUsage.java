@@ -3,6 +3,8 @@ package live.minehub.polarpaper.core.util;
 import ca.spottedleaf.moonrise.patches.chunk_system.scheduling.ChunkHolderManager;
 import ca.spottedleaf.moonrise.patches.chunk_system.scheduling.NewChunkHolder;
 import ca.spottedleaf.moonrise.patches.starlight.light.SWMRNibbleArray;
+import live.minehub.polarpaper.core.generator.PolarGenerator;
+import live.minehub.polarpaper.core.world.PolarChunkArchive;
 import net.minecraft.core.Holder;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.biome.Biome;
@@ -34,7 +36,9 @@ public record WorldUsage(
         long heightmapBytes,
         long overheadBytes,
         int blockEntities,
-        int entities
+        int entities,
+        int archivedChunks,
+        long archivedBytes
 ) {
 
     /**
@@ -56,7 +60,14 @@ public record WorldUsage(
     private static final long POPULATED_SECTION_OVERHEAD_BYTES = 1600;
 
     public long totalBytes() {
-        return blockBytes + biomeBytes + lightBytes + heightmapBytes + overheadBytes;
+        return blockBytes + biomeBytes + lightBytes + heightmapBytes + overheadBytes + archivedBytes;
+    }
+
+    /**
+     * Whether this world is holding part of itself compressed rather than live.
+     */
+    public boolean hasArchive() {
+        return archivedChunks > 0;
     }
 
     /**
@@ -102,8 +113,15 @@ public record WorldUsage(
                 + (long) sectionsWithBlocks * POPULATED_SECTION_OVERHEAD_BYTES
                 + (long) (sections - sectionsWithBlocks) * EMPTY_SECTION_OVERHEAD_BYTES;
 
+        // Chunks kept compressed instead of live are part of what the world costs, even though nothing in
+        // the loops above ever sees them
+        PolarGenerator generator = PolarGenerator.fromWorld(world);
+        PolarChunkArchive archive = generator == null ? null : generator.getChunkArchive();
+
         return new WorldUsage(chunks, sections, sectionsWithBlocks, blockBytes, biomeBytes, lightBytes,
-                heightmapBytes, overheadBytes, blockEntities, world.getEntityCount());
+                heightmapBytes, overheadBytes, blockEntities, world.getEntityCount(),
+                archive == null ? 0 : archive.size(),
+                archive == null ? 0L : archive.compressedBytes());
     }
 
     @SuppressWarnings("unchecked")
