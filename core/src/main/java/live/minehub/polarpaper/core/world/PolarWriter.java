@@ -4,14 +4,23 @@ import com.github.luben.zstd.Zstd;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import live.minehub.polarpaper.core.util.ByteArrayUtil;
+import live.minehub.polarpaper.core.util.CoordConversion;
 import live.minehub.polarpaper.core.util.PaletteUtil;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import static live.minehub.polarpaper.core.util.ByteArrayUtil.*;
 
 public class PolarWriter {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(PolarWriter.class);
 
     private PolarWriter() {
     }
@@ -33,17 +42,47 @@ public class PolarWriter {
     }
 
     public static byte[] write(@NotNull PolarWorld world, @NotNull PolarDataConverter dataConverter) {
-        List<PolarChunk> nonEmptyChunks = world.nonEmptyChunks();
+        return write(world, dataConverter, List.<PolarChunkArchive.ArchivedChunk>of());
+    }
 
-        ByteBuf content = Unpooled.buffer(estimateContentBytes(nonEmptyChunks.size()));
+    /**
+     * Writes a world together with the chunks it was never asked to make live.
+     * <p>
+     * Archived chunks are written back exactly as they were read, so a chunk nobody has touched costs a copy
+     * rather than a full round trip through the palettes, and comes out of the file bit for bit unchanged.
+     */
+    public static byte[] writeWithArchive(@NotNull PolarWorld world, @NotNull PolarDataConverter dataConverter,
+                                          @NotNull PolarChunkArchive archive) {
+        return write(world, dataConverter, archive.snapshot());
+    }
+
+    /**
+     * Writes a world together with an archive snapshot taken earlier.
+     * <p>
+     * Whoever is saving has to take that snapshot <em>before</em> it starts collecting the world's live
+     * chunks. A chunk made live in between is then in both halves, and the duplicate check below keeps the
+     * live one; taken the other way round it would be in neither, and would be missing from the file.
+     */
+    public static byte[] write(@NotNull PolarWorld world, @NotNull PolarDataConverter dataConverter,
+                               @NotNull List<PolarChunkArchive.ArchivedChunk> archiveSnapshot) {
+        List<PolarChunk> nonEmptyChunks = world.nonEmptyChunks();
+        List<PolarChunkArchive.ArchivedChunk> archivedChunks = archivedChunksToWrite(nonEmptyChunks, archiveSnapshot);
+        int chunkCount = nonEmptyChunks.size() + archivedChunks.size();
+
+        ByteBuf content = Unpooled.buffer(estimateContentBytes(chunkCount));
         content.writeByte(world.minSection());
         content.writeByte(world.maxSection());
         writeVarInt(world.userData().length, content);
         content.writeBytes(world.userData());
 
-        writeVarInt(nonEmptyChunks.size(), content);
+        writeVarInt(chunkCount, content);
         for (PolarChunk chunk : nonEmptyChunks) {
             writeChunk(content, chunk, world.maxSection() - world.minSection() + 1);
+        }
+        for (PolarChunkArchive.ArchivedChunk archived : archivedChunks) {
+            writeVarInt(archived.chunkX(), content);
+            writeVarInt(archived.chunkZ(), content);
+            content.writeBytes(archived.body());
         }
 
         byte[] contentBytes = ByteArrayUtil.outputArray(content);
@@ -61,6 +100,31 @@ public class PolarWriter {
         out.writeBytes(payload);
 
         return ByteArrayUtil.outputArray(out);
+    }
+
+    /**
+     * The archived chunks that are not also present in the world.
+     * <p>
+     * A chunk that has been made live belongs to the world from then on, and the archive drops it as it hands
+     * it over. Should the two ever disagree, the live one is the newer of the pair and writing both would
+     * leave the file with two entries for one position.
+     */
+    private static List<PolarChunkArchive.ArchivedChunk> archivedChunksToWrite(
+            @NotNull List<PolarChunk> liveChunks, @NotNull List<PolarChunkArchive.ArchivedChunk> archiveSnapshot) {
+        if (archiveSnapshot.isEmpty()) return List.of();
+
+        Set<Long> liveIndexes = HashSet.newHashSet(liveChunks.size());
+        for (PolarChunk chunk : liveChunks) {
+            liveIndexes.add(CoordConversion.chunkIndex(chunk.x(), chunk.z()));
+        }
+
+        List<PolarChunkArchive.ArchivedChunk> toWrite = new ArrayList<>(archiveSnapshot.size());
+        for (PolarChunkArchive.ArchivedChunk archived : archiveSnapshot) {
+            // Made live after the snapshot was taken, so the live copy is the newer of the two
+            if (liveIndexes.contains(CoordConversion.chunkIndex(archived.chunkX(), archived.chunkZ()))) continue;
+            toWrite.add(archived);
+        }
+        return toWrite;
     }
 
     private static int estimateContentBytes(int chunkCount) {

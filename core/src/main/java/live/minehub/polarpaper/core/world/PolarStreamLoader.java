@@ -131,6 +131,22 @@ public class PolarStreamLoader {
 
     public static CompletableFuture<Void> stream(byte @NotNull [] data, World world, @NotNull PolarDataConverter dataConverter,
                                                   @NotNull PolarWorldAccess worldAccess, @NotNull BlockSelector blockSelector) {
+        return stream(data, world, dataConverter, worldAccess, blockSelector, ChunkResidencyPolicy.LOAD_EVERYTHING, null);
+    }
+
+    /**
+     * Streams a world in, making live only the chunks {@code residency} asks for.
+     *
+     * @param archive collects the chunks left out, so that they survive being saved again; may be null only
+     *                when the residency loads everything
+     */
+    public static CompletableFuture<Void> stream(byte @NotNull [] data, World world, @NotNull PolarDataConverter dataConverter,
+                                                  @NotNull PolarWorldAccess worldAccess, @NotNull BlockSelector blockSelector,
+                                                  @NotNull ChunkResidencyPolicy residency, @Nullable PolarChunkArchive archive) {
+        if (residency != ChunkResidencyPolicy.LOAD_EVERYTHING && archive == null) {
+            throw new IllegalArgumentException("A residency that leaves chunks out needs an archive to keep them in");
+        }
+
         ByteBuf bb = Unpooled.wrappedBuffer(data);
 
         int magic = bb.readInt();
@@ -179,7 +195,7 @@ public class PolarStreamLoader {
         for (int i = 0; i < chunkCount; i++) {
             try {
                 CompletableFuture<Void> future = readChunk(worldAccess.getPlugin(), world, dataConverter, worldAccess,
-                        blockSelector, version, dataVersion, uncompressed, maxSection - minSection + 1);
+                        blockSelector, residency, archive, version, dataVersion, uncompressed, maxSection - minSection + 1);
                 if (future == null) continue;
                 if (future.isCompletedExceptionally()) throw future.exceptionNow();
                 if (!future.isDone()) futures.add(future);
@@ -188,6 +204,11 @@ public class PolarStreamLoader {
                 break;
             }
         }
+
+        // Says plainly how much of the file was made live, so that a residency which quietly fell back to
+        // loading everything is visible in the log rather than only in the memory graph
+        LOGGER.info("Streamed {}: {} chunks in the file, {} kept archived",
+                world.getKey(), chunkCount, archive == null ? 0 : archive.size());
 
         CompletableFuture<Void> scheduledChunks = CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new));
         if (readFailure == null) return scheduledChunks;
@@ -206,12 +227,20 @@ public class PolarStreamLoader {
     private static @Nullable CompletableFuture<Void> readChunk(
             Plugin plugin, World world, @NotNull PolarDataConverter dataConverter,
             @NotNull PolarWorldAccess worldAccess, @NotNull BlockSelector blockSelector,
+            @NotNull ChunkResidencyPolicy residency, @Nullable PolarChunkArchive archive,
             short version, int dataVersion, @NotNull ByteBuf bb, int sectionCount) {
-        var chunkX = getVarInt(bb);
-        var chunkZ = getVarInt(bb);
+        int chunkX = getVarInt(bb);
+        int chunkZ = getVarInt(bb);
 
+        // Outside the world entirely: it is not part of the world and is not kept
         if (!blockSelector.testChunk(chunkX, chunkZ)) {
             PolarReader.skipChunkBody(version, bb, sectionCount);
+            return null;
+        }
+
+        // Part of the world, but not wanted live yet: keep the bytes as they are and move on
+        if (archive != null && !residency.shouldLoad(chunkX, chunkZ)) {
+            archive.store(chunkX, chunkZ, readChunkBodyBytes(version, bb, sectionCount));
             return null;
         }
 
@@ -274,6 +303,21 @@ public class PolarStreamLoader {
     }
 
     /**
+     * Consumes a chunk body and hands back the exact bytes it occupied, for an archive to keep.
+     * <p>
+     * Copied rather than referenced, so that the whole decompressed world can be released once loading is
+     * over instead of being pinned by whichever chunks were kept.
+     */
+    private static byte @NotNull [] readChunkBodyBytes(short version, @NotNull ByteBuf bb, int sectionCount) {
+        int start = bb.readerIndex();
+        PolarReader.skipChunkBody(version, bb, sectionCount);
+
+        byte[] body = new byte[bb.readerIndex() - start];
+        bb.getBytes(start, body);
+        return body;
+    }
+
+    /**
      * Replaces every unselected block in a boundary section with air before the chunk becomes visible.
      */
     public static void maskOutsideSelection(@NotNull LevelChunkSection section, @NotNull BlockSelector blockSelector,
@@ -306,6 +350,58 @@ public class PolarStreamLoader {
      */
     public static CompletableFuture<Void> prepareChunkAsync(LevelChunk chunk) {
         return CompletableFuture.runAsync(() -> primeMissingHeightmaps(chunk));
+    }
+
+    /**
+     * Builds the heightmaps of a chunk that is about to be inserted, for callers already off the main thread.
+     */
+    public static void primeChunk(@NotNull LevelChunk chunk) {
+        primeMissingHeightmaps(chunk);
+    }
+
+    /**
+     * Puts a chunk's real blocks into a chunk that is already in the world, in place of what it holds now.
+     * <p>
+     * Used where a position was made visible as empty before its contents were meant to be seen. Swapping the
+     * sections of the chunk that is already there, rather than putting a different chunk in its place, leaves
+     * the chunk holder, its entities and everything tracking it untouched, so the only thing that changes is
+     * what the blocks are.
+     * <p>
+     * The chunk is relit and resent afterwards, because terrain appearing out of nothing changes the light of
+     * its neighbours as well as its own. Must be called on the thread that owns the world.
+     */
+    public static void replaceChunkBlocks(@NotNull ServerLevel serverLevel, @NotNull World world,
+                                           @NotNull LevelChunk target, @NotNull LevelChunk source,
+                                           @NotNull PolarChunk polarChunk, @NotNull PolarWorldAccess worldAccess,
+                                           @NotNull BlockSelector blockSelector) {
+        LevelChunkSection[] targetSections = target.getSections();
+        LevelChunkSection[] sourceSections = source.getSections();
+        if (targetSections.length != sourceSections.length) {
+            throw new IllegalArgumentException("Cannot replace a chunk of " + targetSections.length
+                    + " sections with one of " + sourceSections.length);
+        }
+        System.arraycopy(sourceSections, 0, targetSections, 0, targetSections.length);
+
+        Heightmap.primeHeightmaps(target, ChunkStatus.FULL.heightmapsAfter());
+
+        for (PolarChunk.BlockEntity blockEntity : polarChunk.blockEntities()) {
+            if (!isBlockEntitySelected(blockEntity, blockSelector, polarChunk.x(), polarChunk.z())) continue;
+            addBlockEntity(blockEntity, target);
+        }
+        worldAccess.loadChunkData(world, target, polarChunk.userData(), blockSelector);
+
+        // Light is recomputed rather than copied from the file: the neighbours were lit against an empty
+        // chunk here, and only the light engine knows how to correct them now that it is not empty
+        relight(serverLevel, target);
+        world.refreshChunk(target.locX, target.locZ);
+    }
+
+    /**
+     * Relights a chunk and everything its light can reach.
+     */
+    private static void relight(@NotNull ServerLevel serverLevel, @NotNull LevelChunk chunk) {
+        ThreadedLevelLightEngine lightEngine = (ThreadedLevelLightEngine) serverLevel.getLightEngine();
+        lightEngine.starlight$serverRelightChunks(List.of(chunk.getPos()), _ -> {}, _ -> {});
     }
 
     public static void insertChunk(ServerLevel serverLevel, NoUnloadLevelChunk newLevelChunk) {

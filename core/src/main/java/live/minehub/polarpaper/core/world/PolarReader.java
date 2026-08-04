@@ -102,10 +102,20 @@ public class PolarReader {
     }
 
     protected static @NotNull PolarChunk readChunk(@NotNull PolarDataConverter dataConverter, short version, int dataVersion, @NotNull ByteBuf bb, int sectionCount) {
-        var chunkX = getVarInt(bb);
-        var chunkZ = getVarInt(bb);
+        int chunkX = getVarInt(bb);
+        int chunkZ = getVarInt(bb);
+        return readChunkBody(dataConverter, version, dataVersion, bb, sectionCount, chunkX, chunkZ);
+    }
 
-        var sections = new PolarSection[sectionCount];
+    /**
+     * Reads everything a chunk consists of apart from its coordinates, which the caller has to supply.
+     * <p>
+     * Split out from {@link #readChunk} so that a chunk kept aside by {@link PolarChunkArchive} can be read
+     * back on its own, without the surrounding world.
+     */
+    public static @NotNull PolarChunk readChunkBody(@NotNull PolarDataConverter dataConverter, short version, int dataVersion,
+                                                    @NotNull ByteBuf bb, int sectionCount, int chunkX, int chunkZ) {
+        PolarSection[] sections = new PolarSection[sectionCount];
         for (int i = 0; i < sectionCount; i++) {
             sections[i] = readSection(dataConverter, version, dataVersion, bb);
         }
@@ -133,7 +143,7 @@ public class PolarReader {
             }
         }
 
-        var heightmaps = readHeightmaps(bb);
+        int[][] heightmaps = readHeightmaps(bb);
 
         // Objects
         byte[] userData = getByteArray(bb);

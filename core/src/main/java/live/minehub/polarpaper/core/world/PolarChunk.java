@@ -564,7 +564,7 @@ public record PolarChunk(
      * The key a biome is saved under, falling back to the default biome for entries this server cannot name,
      * so that the entry keeps its place in the palette.
      */
-    private static String biomeKeyOrDefault(Registry<Biome> biomeRegistry, @Nullable Holder<Biome> biomeHolder) {
+    private static String biomeKeyOrDefault(Registry<Biome> biomeRegistry, Holder<Biome> biomeHolder) {
         if (biomeHolder != null && biomeHolder.value() instanceof Biome biome) {
             Identifier key = biomeRegistry.getKey(biome);
             if (key != null) return key.toString();

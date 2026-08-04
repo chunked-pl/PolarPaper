@@ -1,18 +1,22 @@
 package live.minehub.polarpaper;
 
+import io.netty.buffer.Unpooled;
 import live.minehub.polarpaper.core.config.Config;
 import live.minehub.polarpaper.core.generator.PolarGenerator;
 import live.minehub.polarpaper.core.generator.PolarStreamingGenerator;
 import live.minehub.polarpaper.core.source.BytesPolarSource;
 import live.minehub.polarpaper.core.source.FilePolarSource;
 import live.minehub.polarpaper.core.source.PolarSource;
+import live.minehub.polarpaper.core.util.CoordConversion;
 import live.minehub.polarpaper.core.util.TaskFutures;
 import live.minehub.polarpaper.core.world.*;
 import live.minehub.polarpaper.nms.VersionUtil;
 import live.minehub.polarpaper.util.EntitiesWorldAccess;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
+import ca.spottedleaf.moonrise.patches.chunk_system.scheduling.NewChunkHolder;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.level.chunk.LevelChunk;
 import org.bukkit.*;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.craftbukkit.CraftWorld;
@@ -160,6 +164,21 @@ public class Polar {
      * @see BytesPolarSource
      */
     public static CompletableFuture<@Nullable World> createWorld(@Nullable PolarSource source, @NotNull String worldName, @NotNull Config config, @NotNull PolarWorldAccess worldAccess) {
+        return createWorld(source, worldName, config, worldAccess, ChunkResidencyPolicy.LOAD_EVERYTHING);
+    }
+
+    /**
+     * Creates a polar world in which only the chunks {@code residency} asks for are live.
+     * <p>
+     * The rest are still part of the world and are still saved, but they stay compressed in the generator's
+     * {@link PolarChunkArchive} until {@link #loadChunk} is called for them. A world used this way costs
+     * memory in proportion to the part of it that is in use rather than to its size on disk.
+     *
+     * @see #loadChunk(World, int, int)
+     */
+    public static CompletableFuture<@Nullable World> createWorld(@Nullable PolarSource source, @NotNull String worldName,
+                                                                 @NotNull Config config, @NotNull PolarWorldAccess worldAccess,
+                                                                 @NotNull ChunkResidencyPolicy residency) {
         byte[] worldBytes;
         try {
             worldBytes = source == null ? null : source.readBytes();
@@ -168,7 +187,8 @@ public class Polar {
             return CompletableFuture.failedFuture(e);
         }
 
-        return createWorld(new PolarStreamingGenerator(config, source, worldAccess), worldName).thenComposeAsync(world -> {
+        PolarStreamingGenerator generator = new PolarStreamingGenerator(config, source, worldAccess);
+        return createWorld(generator, worldName).thenComposeAsync(world -> {
             if (world == null) return CompletableFuture.completedFuture(null);
 
             // stream() validates the header eagerly, so it can fail before it ever returns a future
@@ -176,9 +196,10 @@ public class Polar {
             try {
                 streamed = worldBytes == null || worldBytes.length == 0
                         ? CompletableFuture.completedFuture(null)
-                        : PolarStreamLoader.stream(worldBytes, world, worldAccess,
+                        : PolarStreamLoader.stream(worldBytes, world, PolarDataConverter.DEFAULT, worldAccess,
                                 BlockSelector.horizontalCircle(config.spawn().getBlockX(), config.spawn().getBlockZ(),
-                                        config.worldRadiusBlocks()));
+                                        config.worldRadiusBlocks()),
+                                residency, generator.getChunkArchive());
             } catch (Throwable t) {
                 streamed = CompletableFuture.failedFuture(t);
             }
@@ -245,6 +266,132 @@ public class Polar {
                     .handle((_, ex) -> ex)
                     .thenCompose(ex -> finishOrAbortLoading(world, config, worldName, ex));
         });
+    }
+
+    /**
+     * Drops the positions whose live chunk is only a stand in, so that the archived chunk is written for them
+     * instead. Without this a world would be saved showing whatever was put there to look at, in place of
+     * what it actually holds.
+     */
+    private static void dropPlaceholderChunks(@NotNull PolarWorld polarWorld, @NotNull PolarGenerator generator) {
+        for (long chunkIndex : generator.getPlaceholderChunks()) {
+            polarWorld.removeChunkAt(CoordConversion.chunkX(chunkIndex), CoordConversion.chunkZ(chunkIndex));
+        }
+    }
+
+    /**
+     * Makes a chunk that was kept aside at load time live in the world.
+     * <p>
+     * Does nothing and reports false for a chunk that is already live, or that this world does not hold. Safe
+     * to call from any thread; the chunk becomes visible on the world's own thread.
+     *
+     * @see #createWorld(PolarSource, String, Config, PolarWorldAccess, ChunkResidencyPolicy)
+     */
+    @SuppressWarnings("UnusedReturnValue")
+    public static CompletableFuture<Boolean> loadChunk(@NotNull World world, int chunkX, int chunkZ) {
+        PolarStreamingGenerator generator = streamingGeneratorOf(world);
+        if (generator == null) return CompletableFuture.completedFuture(false);
+
+        // Removed from the archive as it is read, so that saving never writes the same chunk twice
+        byte[] body = generator.getChunkArchive().take(chunkX, chunkZ);
+        if (body == null) return CompletableFuture.completedFuture(false);
+
+        Short version = generator.getVersion();
+        Integer dataVersion = generator.getDataVersion();
+        if (version == null || dataVersion == null) {
+            generator.getChunkArchive().store(chunkX, chunkZ, body);
+            return CompletableFuture.failedFuture(new IllegalStateException(
+                    "World " + world.getKey() + " has archived chunks but was never read from polar data"));
+        }
+
+        ServerLevel level = ((CraftWorld) world).getHandle();
+        BlockSelector blockSelector = generator.getWorldBlockSelector();
+        int sectionCount = level.getSectionsCount();
+
+        // Expanding a chunk means decompressing it, parsing two dozen sections, building their palettes and
+        // lighting them. None of that touches the live world, and doing it on the caller's thread would stall
+        // the server for as long as it takes, once per chunk, right as a player buys one.
+        return CompletableFuture
+                .supplyAsync(() -> {
+                    PolarChunk chunk = PolarReader.readChunkBody(PolarDataConverter.DEFAULT, version, dataVersion,
+                            Unpooled.wrappedBuffer(body), sectionCount, chunkX, chunkZ);
+                    NoUnloadLevelChunk levelChunk = chunk.createLevelChunk(level, blockSelector);
+                    PolarStreamLoader.primeChunk(levelChunk);
+                    return new PreparedChunk(chunk, levelChunk);
+                })
+                .thenCompose(prepared -> TaskFutures.runSync(PolarPaper.getPlugin(), () -> {
+                    LevelChunk existing = liveChunkAt(level, chunkX, chunkZ);
+                    if (existing != null) {
+                        // Already standing there as an empty placeholder, so only its blocks change
+                        PolarStreamLoader.replaceChunkBlocks(level, world, existing, prepared.levelChunk(),
+                                prepared.chunk(), generator.getWorldAccess(), blockSelector);
+                        generator.clearPlaceholderChunk(chunkX, chunkZ);
+                        return true;
+                    }
+
+                    generator.clearPlaceholderChunk(chunkX, chunkZ);
+
+                    for (PolarChunk.BlockEntity blockEntity : prepared.chunk().blockEntities()) {
+                        if (!PolarStreamLoader.isBlockEntitySelected(blockEntity, blockSelector, chunkX, chunkZ)) continue;
+                        PolarStreamLoader.addBlockEntity(blockEntity, prepared.levelChunk());
+                    }
+                    prepared.levelChunk().tryMarkSaved();
+                    PolarStreamLoader.insertChunk(level, prepared.levelChunk());
+                    generator.getWorldAccess().loadChunkData(world, prepared.levelChunk(), prepared.chunk().userData(), blockSelector);
+                    return true;
+                }))
+                .whenComplete((_, failure) -> {
+                    // Put it back rather than lose it: a chunk that could not be expanded is still the
+                    // player's build, and the archive is the only copy of it the world has
+                    if (failure != null) generator.getChunkArchive().store(chunkX, chunkZ, body);
+                });
+    }
+
+    /**
+     * Puts an empty chunk at a position whose real contents are not meant to be seen yet.
+     * <p>
+     * The world needs a chunk to be there for light to behave along its edge, but nothing says it has to be
+     * the chunk the file holds. This gives the position a chunk made of air; the real one stays archived
+     * until {@link #loadChunk} replaces this one with it. Does nothing if a chunk is already there.
+     *
+     * @return whether an empty chunk was put there
+     */
+    @SuppressWarnings("UnusedReturnValue")
+    public static CompletableFuture<Boolean> loadEmptyChunk(@NotNull World world, int chunkX, int chunkZ) {
+        PolarStreamingGenerator generator = streamingGeneratorOf(world);
+        if (generator == null) return CompletableFuture.completedFuture(false);
+
+        ServerLevel level = ((CraftWorld) world).getHandle();
+        if (liveChunkAt(level, chunkX, chunkZ) != null) return CompletableFuture.completedFuture(false);
+
+        BlockSelector blockSelector = generator.getWorldBlockSelector();
+        PolarChunk chunk = new PolarChunk(chunkX, chunkZ, level.getSectionsCount());
+        NoUnloadLevelChunk levelChunk = chunk.createLevelChunk(level, blockSelector);
+
+        return PolarStreamLoader.prepareChunkAsync(levelChunk)
+                .thenCompose(_ -> TaskFutures.runSync(PolarPaper.getPlugin(), () -> {
+                    if (liveChunkAt(level, chunkX, chunkZ) != null) return false;
+                    levelChunk.tryMarkSaved();
+                    PolarStreamLoader.insertChunk(level, levelChunk);
+                    // Saving must write the archived chunk for this position, not the empty one now standing
+                    // there to be looked at
+                    generator.markPlaceholderChunk(chunkX, chunkZ);
+                    return true;
+                }));
+    }
+
+    private static @Nullable PolarStreamingGenerator streamingGeneratorOf(@NotNull World world) {
+        PolarGenerator generator = PolarGenerator.fromWorld(world);
+        return generator instanceof PolarStreamingGenerator streaming ? streaming : null;
+    }
+
+    private static @Nullable LevelChunk liveChunkAt(@NotNull ServerLevel level, int chunkX, int chunkZ) {
+        NewChunkHolder holder = level.moonrise$getChunkTaskScheduler().chunkHolderManager.getChunkHolder(chunkX, chunkZ);
+        return holder != null && holder.getCurrentChunk() instanceof LevelChunk chunk ? chunk : null;
+    }
+
+    /** A chunk built off the main thread, waiting to be put into the world on it. */
+    private record PreparedChunk(PolarChunk chunk, NoUnloadLevelChunk levelChunk) {
     }
 
     /**
@@ -593,13 +740,16 @@ public class Polar {
 
         Config config = generator.getConfig();
         BlockSelector blockSelector = generator.getWorldBlockSelector();
+        List<PolarChunkArchive.ArchivedChunk> archiveSnapshot = generator.getChunkArchive().snapshot();
         Collection<PolarChunk> extraChunks = generator.getPolarWorld() == null
                 ? List.of()
                 : generator.getPolarWorld().chunks();
         PolarWorld polarWorld = PolarWorld.convertSynchronously(
                 world, generator.getWorldAccess(), blockSelector, config, extraChunks);
         polarWorld.userData(generator.getUserData());
-        generator.getSource().saveBytes(PolarWriter.write(polarWorld));
+        dropPlaceholderChunks(polarWorld, generator);
+        generator.getSource().saveBytes(
+                PolarWriter.write(polarWorld, PolarDataConverter.DEFAULT, archiveSnapshot));
     }
 
     /**
@@ -623,9 +773,15 @@ public class Polar {
                 config.spawn().getBlockX(), config.spawn().getBlockZ(), config.worldRadiusBlocks());
         BlockSelector boundedSelector = BlockSelector.intersection(blockSelector, radiusSelector);
 
-        // Converting only looks at chunks, so the world level user data has to be carried across by hand
+        // Converting only looks at the chunks that are live, so the world level user data and the chunks that
+        // were never made live both have to be carried across by hand.
+        // The archive is snapshotted first, before a single live chunk is collected: a chunk made live in
+        // between then appears in both halves and the writer keeps the live one, where the other order would
+        // drop it from both and lose it from the file.
         PolarGenerator generator = PolarGenerator.fromWorld(world);
         byte[] worldUserData = generator == null ? new byte[0] : generator.getUserData();
+        List<PolarChunkArchive.ArchivedChunk> archiveSnapshot =
+                generator == null ? List.of() : generator.getChunkArchive().snapshot();
 
         CompletableFuture<PolarWorld> future;
         try {
@@ -636,7 +792,8 @@ public class Polar {
 
         return future.thenAcceptAsync(newPolarWorld -> {
             newPolarWorld.userData(worldUserData);
-            byte[] worldBytes = PolarWriter.write(newPolarWorld);
+            if (generator != null) dropPlaceholderChunks(newPolarWorld, generator);
+            byte[] worldBytes = PolarWriter.write(newPolarWorld, PolarDataConverter.DEFAULT, archiveSnapshot);
             try {
                 polarSource.saveBytes(worldBytes);
             } catch (Exception e) {
