@@ -50,6 +50,17 @@ public abstract class PolarGenerator extends ChunkGenerator {
         return BlockSelector.horizontalCircle(spawn.getBlockX(), spawn.getBlockZ(), config.worldRadiusBlocks());
     }
 
+    /**
+     * The world level user data this world was loaded with, such as the schematic center.
+     * <p>
+     * Saving rebuilds the world from the chunks that are loaded, which knows nothing about this, so it has to
+     * be carried across from here or every save would quietly drop it.
+     */
+    public byte @NotNull [] getUserData() {
+        PolarWorld polarWorld = getPolarWorld();
+        return polarWorld == null ? new byte[0] : polarWorld.userData();
+    }
+
     public abstract @Nullable PolarWorld getPolarWorld();
 
     public abstract Component getInfoComponent(World world);

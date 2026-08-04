@@ -90,7 +90,8 @@ public class UnloadCommand extends PolarCmd {
         return TaskFutures.runSync(PolarPaper.getPlugin(), () -> {
             return Bukkit.unloadWorld(bukkitWorld, false);
         }).handle((success, ex) -> {
-            if (!success || ex != null) {
+            // ex is checked first: success is null whenever the task failed, and unboxing it would throw
+            if (ex != null || !success) {
                 if (!bukkitWorld.getPlayers().isEmpty()) {
                     ctx.getSource().getSender().sendMessage(
                             Component.text()

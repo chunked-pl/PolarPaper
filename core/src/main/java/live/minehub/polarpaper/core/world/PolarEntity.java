@@ -51,7 +51,7 @@ public record PolarEntity(double x, double y, double z, float yaw, float pitch, 
         // Rotate painting
         String paintingVariant = compound.getString("variant").orElse(null);
         if (entityId.equals("painting") && paintingVariant != null) {
-            int facingIndex = (int) Math.floor(spawnLocation.getYaw() / 90) % 4;
+            int facingIndex = facingIndex(spawnLocation.getYaw());
             Direction[] directions = {Direction.SOUTH, Direction.WEST, Direction.NORTH, Direction.EAST};
             compound.put("facing", IntTag.valueOf(facingIndex));
 
@@ -74,7 +74,7 @@ public record PolarEntity(double x, double y, double z, float yaw, float pitch, 
         // 3-south, 4-west, 2-north, 5-east, 1-top, and 0-bottom
         Integer facingValue = compound.getInt("Facing").orElse(null);
         if ((entityId.equals("item_frame") || entityId.equals("glow_item_frame")) && facingValue != null && facingValue != 1 && facingValue != 0) {
-            int facingIndex = (int) Math.floor(spawnLocation.getYaw() / 90) % 4;
+            int facingIndex = facingIndex(spawnLocation.getYaw());
             Direction[] directions = {Direction.SOUTH, Direction.WEST, Direction.NORTH, Direction.EAST};
             int newFacingValue = directions[facingIndex].get3DDataValue();
             compound.put("Facing", IntTag.valueOf(newFacingValue));
@@ -87,6 +87,18 @@ public record PolarEntity(double x, double y, double z, float yaw, float pitch, 
         if (nmsEntity == null) return null;
 
         return nmsEntity;
+    }
+
+    /**
+     * Which of the four horizontal directions a yaw points at, as an index into a south, west, north, east
+     * array.
+     * <p>
+     * Yaw is normalised first: the game keeps it in (-180, 180], and a raw remainder of a negative yaw is
+     * itself negative, which would index off the front of that array and take the whole world load down with
+     * it.
+     */
+    private static int facingIndex(float yaw) {
+        return Math.floorMod((int) Math.floor(yaw / 90), 4);
     }
 
     public Location getLocation(Chunk chunk) {

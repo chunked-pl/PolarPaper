@@ -6,13 +6,13 @@ import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
 import io.papermc.paper.command.brigadier.Commands;
-import live.minehub.polarpaper.PolarPaper;
 import live.minehub.polarpaper.core.generator.PolarGenerator;
 import live.minehub.polarpaper.core.world.PolarReader;
 import live.minehub.polarpaper.core.world.PolarWorld;
 import live.minehub.polarpaper.schematic.Rotation;
 import live.minehub.polarpaper.schematic.Schematic;
 import live.minehub.polarpaper.schematic.Setter;
+import live.minehub.polarpaper.util.WorldKey;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import org.bukkit.command.CommandSender;
@@ -103,9 +103,8 @@ public class PasteCommand extends PolarCmd {
 
         String worldName = ctx.getArgument("world name", String.class);
 
-        Path pluginFolder = PolarPaper.getPlugin().getDataPath();
-        Path worldsFolder = pluginFolder.resolve("worlds");
-        Path path = worldsFolder.resolve(worldName + ".polar");
+        Path path = WorldKey.validatePath(player, worldName);
+        if (path == null) return Command.SINGLE_SUCCESS;
 
         if (!Files.exists(path)) {
             player.sendMessage(Component.text("Couldn't find file '" + worldName + ".polar' in the worlds folder", NamedTextColor.RED));

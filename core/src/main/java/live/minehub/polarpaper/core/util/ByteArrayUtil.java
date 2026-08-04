@@ -100,6 +100,7 @@ public class ByteArrayUtil {
         return length;
     }
     public static byte[] getLightData(ByteBuf bb) {
+        requireReadableLength(bb, LightUtil.LIGHT_LENGTH, 1, "light data");
         byte[] bytes = new byte[LightUtil.LIGHT_LENGTH];
         bb.readBytes(bytes);
         return bytes;

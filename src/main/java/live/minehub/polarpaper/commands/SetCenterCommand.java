@@ -8,6 +8,7 @@ import io.papermc.paper.command.brigadier.CommandSourceStack;
 import io.papermc.paper.command.brigadier.Commands;
 import live.minehub.polarpaper.PolarPaper;
 import live.minehub.polarpaper.core.generator.PolarGenerator;
+import live.minehub.polarpaper.core.generator.PolarStreamingGenerator;
 import live.minehub.polarpaper.core.source.PolarSource;
 import live.minehub.polarpaper.core.userdata.WorldUserData;
 import live.minehub.polarpaper.core.world.PolarReader;
@@ -55,10 +56,17 @@ public class SetCenterCommand extends PolarCmd {
                     sender.sendMessage(Component.text("No source is defined for this world", NamedTextColor.RED));
                     return;
                 }
+                byte[] userData = WorldUserData.writeSchematicOffset(center);
                 PolarWorld newPolarWorld = PolarReader.read(source);
-                newPolarWorld.userData(WorldUserData.writeSchematicOffset(center));
+                newPolarWorld.userData(userData);
                 byte[] worldBytes = PolarWriter.write(newPolarWorld);
                 source.saveBytes(worldBytes);
+
+                // The world is still loaded, so without this the next autosave would write the file back out
+                // with whatever center it was loaded with
+                if (polarGenerator instanceof PolarStreamingGenerator streamingGenerator) {
+                    streamingGenerator.setUserData(userData);
+                }
             } catch (Exception e) {
                 String errorMsg = String.format("Failed to save '%s', please check logs for error", bukkitWorld.getKey().getKey());
                 LOGGER.error(errorMsg, e);

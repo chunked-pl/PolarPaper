@@ -11,6 +11,7 @@ import live.minehub.polarpaper.PolarPaper;
 import live.minehub.polarpaper.core.config.Config;
 import live.minehub.polarpaper.core.generator.PolarGenerator;
 import live.minehub.polarpaper.core.source.PolarSource;
+import live.minehub.polarpaper.util.WorldKey;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.event.ClickEvent;
 import net.kyori.adventure.text.event.HoverEvent;
@@ -41,6 +42,9 @@ public class CreateBlankCommand extends PolarCmd {
             );
             return Command.SINGLE_SUCCESS;
         }
+
+        // The name becomes a file name in the worlds folder, so it must not be able to point outside it
+        if (WorldKey.validatePath(ctx.getSource().getSender(), worldName) == null) return Command.SINGLE_SUCCESS;
 
         FileConfiguration fileConfig = PolarPaper.getPlugin().getConfig();
         Config defaultConfig = Config.getDefaultConfig(fileConfig);

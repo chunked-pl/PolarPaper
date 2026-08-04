@@ -27,7 +27,8 @@ public class PolarStreamingGenerator extends PolarGenerator {
         return null;
     }
 
-    public byte[] getUserData() {
+    @Override
+    public byte @NotNull [] getUserData() {
         return userData;
     }
 

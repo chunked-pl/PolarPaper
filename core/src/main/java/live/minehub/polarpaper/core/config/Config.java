@@ -136,18 +136,28 @@ public record Config(
     }
 
     public static void writeToConfig(Path configPath, FileConfiguration fileConfig, String worldName, Config config) {
+        applyToConfig(fileConfig, worldName, config);
+
+        try {
+            fileConfig.save(configPath.toFile());
+        } catch (IOException e) {
+            LOGGER.error("Failed to save world to config file", e);
+        }
+    }
+
+    /**
+     * Puts a world's settings into the config held in memory, without touching the file on disk.
+     * <p>
+     * Split out from {@link #writeToConfig} so that a caller on a thread it must not block can do this part
+     * there and leave writing the file itself to somewhere it costs nothing.
+     */
+    public static void applyToConfig(FileConfiguration fileConfig, String worldName, Config config) {
         Config defaultConfig = getDefaultConfig(fileConfig);
 
         String prefix = String.format("worlds.%s.", worldName);
 
         for (Property<?> property : PROPERTIES) {
             property.write(fileConfig, prefix, config, defaultConfig);
-        }
-
-        try {
-            fileConfig.save(configPath.toFile());
-        } catch (IOException e) {
-            LOGGER.error("Failed to save world to config file", e);
         }
     }
 
@@ -197,8 +207,14 @@ public record Config(
         }
 
         public Builder fromWorld(World world) {
+            // Taken without its world, because only the coordinates are ever written to the config and a
+            // config read back from the file has no world either. Leaving it set would make two configs
+            // describing identical settings compare unequal, which is how a pointless write is recognised.
+            Location spawn = world.getSpawnLocation().clone();
+            spawn.setWorld(null);
+
             this.time(world.getTime())
-                    .spawn(world.getSpawnLocation())
+                    .spawn(spawn)
                     .difficulty(world.getDifficulty())
                     .environment(world.getEnvironment());
 
@@ -393,10 +409,24 @@ public record Config(
             writer.apply(builder, defaultValue);
         }
 
+        /**
+         * Applies the configured value, falling back to the default if the file holds something this property
+         * cannot use.
+         * <p>
+         * The value is read out of the file untyped, so a hand edited config can hold a string where a number
+         * belongs. Letting that escape would abort loading the world, and abort every autosave after it, over
+         * a single typo.
+         */
         public void apply(Builder builder, FileConfiguration config, String prefix) {
-            T value = read(config, prefix);
-            if (value == null) return;
-            writer.apply(builder, value);
+            T value;
+            try {
+                value = read(config, prefix);
+                if (value == null) return;
+                writer.apply(builder, value);
+            } catch (ClassCastException | IllegalArgumentException e) {
+                LOGGER.warn("Invalid value for '{}{}', using the default of {}", prefix, path, defaultValue, e);
+                writer.apply(builder, defaultValue);
+            }
         }
 
         public T read(FileConfiguration config, String prefix) {
@@ -592,6 +622,12 @@ public record Config(
             for (Map<?, ?> ymlGamerule : ymlGamerules) {
                 for (Map.Entry<?, ?> entry : ymlGamerule.entrySet()) {
                     if (!(entry.getKey() instanceof String key)) continue;
+                    // "- someRule:" with nothing after it parses as a null value, which nothing downstream
+                    // can apply and which would break writing the config back out
+                    if (entry.getValue() == null) {
+                        LOGGER.warn("Ignoring gamerule '{}' because it has no value", key);
+                        continue;
+                    }
 
                     gamerules.put(key, entry.getValue());
                 }
@@ -602,6 +638,7 @@ public record Config(
         private @NotNull List<Map<String, ?>> gamerulesList(Map<String, Object> gamerules) {
             List<Map<String, ?>> gamerulesList = new ArrayList<>(gamerules.size());
             for (Map.Entry<String, Object> entry : gamerules.entrySet()) {
+                if (entry.getValue() == null) continue; // Map.of rejects nulls, and a valueless rule is meaningless
                 gamerulesList.add(Map.of(entry.getKey(), entry.getValue()));
             }
             return gamerulesList;

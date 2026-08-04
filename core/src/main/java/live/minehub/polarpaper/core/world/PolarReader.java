@@ -25,6 +25,15 @@ public class PolarReader {
     private static final int MAX_BLOCK_PALETTE_SIZE = 16 * 16 * 16;
     private static final int MAX_BIOME_PALETTE_SIZE = 8 * 8 * 8;
 
+    /**
+     * The largest buffer a file is allowed to ask for when its zstd frame does not declare its own size.
+     * <p>
+     * The uncompressed length is read straight out of the header and is what the destination array is sized
+     * at, so a truncated or hostile file could otherwise make the server allocate gigabytes and die of an
+     * OutOfMemoryError before a single block has been read.
+     */
+    private static final int MAX_UNDECLARED_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024;
+
     public static @NotNull PolarWorld read(PolarSource source) throws IOException {
         try {
             return read(source.readBytes());
@@ -367,7 +376,19 @@ public class PolarReader {
                 byte[] bytes = new byte[length];
                 buffer.readBytes(bytes);
 
-                var decompressed = Zstd.decompress(bytes, compressedLength);
+                // Every writer of this format compresses with a frame that records its own uncompressed size,
+                // so the length claimed by the header can be checked against the data before trusting it to
+                // size an array. Frames without one are only bounded by the cap.
+                long frameContentSize = Zstd.decompressedSize(bytes);
+                if (frameContentSize == 0) {
+                    assertThat(compressedLength <= MAX_UNDECLARED_UNCOMPRESSED_BYTES,
+                            "Uncompressed length is too large and the compressed data does not declare its own: " + compressedLength);
+                } else {
+                    assertThat(frameContentSize == compressedLength,
+                            "Uncompressed length does not match the compressed data: " + compressedLength + " (expected " + frameContentSize + ")");
+                }
+
+                byte[] decompressed = Zstd.decompress(bytes, compressedLength);
                 yield Unpooled.wrappedBuffer(decompressed);
             }
         };

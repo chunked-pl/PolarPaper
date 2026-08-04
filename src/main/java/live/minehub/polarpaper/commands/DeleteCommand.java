@@ -96,25 +96,37 @@ public class DeleteCommand extends PolarCmd {
             return;
         }
 
-        try {
-            generator.getSource().delete();
-        } catch (UnsupportedOperationException _) {
-            ctx.getSource().getSender().sendMessage(Component.text("This world's source does not support deleting", NamedTextColor.RED));
-            return;
-        } catch (Exception e) {
-            ctx.getSource().getSender().sendMessage(Component.text("Failed to delete world", NamedTextColor.RED));
-            LOGGER.error("Failed to delete world: " + world.getKey().getKey(), e);
-            return;
-        }
+        // Unloaded first: a world that is still running would autosave (or save on stop) straight back over
+        // the file that was just deleted
+        UnloadCommand.bukkitUnload(ctx, world).thenAccept(unloaded -> {
+            if (!unloaded) {
+                ctx.getSource().getSender().sendMessage(
+                        Component.text()
+                                .append(Component.text("Not deleting '", NamedTextColor.RED))
+                                .append(Component.text(world.getKey().getKey(), NamedTextColor.RED))
+                                .append(Component.text("' because it could not be unloaded", NamedTextColor.RED))
+                );
+                return;
+            }
 
-        ctx.getSource().getSender().sendMessage(
-                Component.text()
-                        .append(Component.text("Deleted '", NamedTextColor.AQUA))
-                        .append(Component.text(world.getKey().getKey(), NamedTextColor.AQUA))
-                        .append(Component.text("'!", NamedTextColor.AQUA))
-        );
+            try {
+                generator.getSource().delete();
+            } catch (UnsupportedOperationException _) {
+                ctx.getSource().getSender().sendMessage(Component.text("This world's source does not support deleting", NamedTextColor.RED));
+                return;
+            } catch (Exception e) {
+                ctx.getSource().getSender().sendMessage(Component.text("Failed to delete world", NamedTextColor.RED));
+                LOGGER.error("Failed to delete world: " + world.getKey().getKey(), e);
+                return;
+            }
 
-        UnloadCommand.bukkitUnload(ctx, world);
+            ctx.getSource().getSender().sendMessage(
+                    Component.text()
+                            .append(Component.text("Deleted '", NamedTextColor.AQUA))
+                            .append(Component.text(world.getKey().getKey(), NamedTextColor.AQUA))
+                            .append(Component.text("'!", NamedTextColor.AQUA))
+            );
+        });
     }
 
     @Override

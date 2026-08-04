@@ -21,7 +21,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 public class PolarWorld {
 
@@ -42,6 +45,14 @@ public class PolarWorld {
 
     public static CompressionType DEFAULT_COMPRESSION = CompressionType.ZSTD;
     public static int DEFAULT_COMPRESSION_LEVEL = 7;
+
+    /**
+     * How long converting a world's chunks may take before the save is abandoned.
+     * <p>
+     * Sized for the worst legitimate case, a command converting a large region it has to load from disk
+     * first, so that it only ever trips on work that is genuinely stuck.
+     */
+    private static final int CHUNK_CONVERSION_TIMEOUT_MINUTES = 10;
 
     // Polar metadata
     private final short version;
@@ -275,15 +286,14 @@ public class PolarWorld {
         for (long chunkIndex : chunkIndexes) {
             int chunkX = CoordConversion.chunkX(chunkIndex);
             int chunkZ = CoordConversion.chunkZ(chunkIndex);
-            // One unreadable chunk should not fail the whole world, so it is dropped after being reported
+            // Reported here, but the failure is left in place so that it fails the whole conversion below
             futures.add(PolarChunk.convert(world, chunkX, chunkZ, polarWorldAccess, blockSelector, config.saveLight(), loadChunks)
-                    .exceptionally(e -> {
-                        LOGGER.error("Failed to convert chunk at {} {} in {}", chunkX, chunkZ, world.getKey(), e);
-                        return null;
+                    .whenComplete((_, e) -> {
+                        if (e != null) LOGGER.error("Failed to convert chunk at {} {} in {}", chunkX, chunkZ, world.getKey(), e);
                     }));
         }
 
-        return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).thenApply(_ -> {
+        return awaitChunks(world, futures).thenApply(_ -> {
             List<PolarChunk> chunks = new ArrayList<>(futures.size());
             for (CompletableFuture<PolarChunk> future : futures) {
                 PolarChunk polarChunk = future.join();
@@ -300,6 +310,29 @@ public class PolarWorld {
                     chunks
             );
         });
+    }
+
+    /**
+     * Waits for every chunk, giving up rather than waiting forever.
+     * <p>
+     * A chunk load whose callback never runs would otherwise leave this pending for the life of the server:
+     * the save would never finish, and because the autosave task refuses to start while one is in flight,
+     * the world would silently stop being saved from then on. Failing instead leaves the world's previous
+     * file untouched and lets the next autosave try again.
+     */
+    private static CompletableFuture<Void> awaitChunks(World world, List<CompletableFuture<@Nullable PolarChunk>> futures) {
+        return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+                .orTimeout(CHUNK_CONVERSION_TIMEOUT_MINUTES, TimeUnit.MINUTES)
+                .whenComplete((_, e) -> {
+                    if (!(unwrap(e) instanceof TimeoutException)) return;
+                    LOGGER.error("Timed out after {} minutes converting {} of {}'s chunks. The world has not been saved and its previous file is untouched",
+                            CHUNK_CONVERSION_TIMEOUT_MINUTES, futures.size(), world.getKey());
+                });
+    }
+
+    private static @Nullable Throwable unwrap(@Nullable Throwable throwable) {
+        if (throwable instanceof CompletionException && throwable.getCause() != null) return throwable.getCause();
+        return throwable;
     }
 
     /**

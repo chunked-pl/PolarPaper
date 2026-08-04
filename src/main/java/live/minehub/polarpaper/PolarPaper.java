@@ -108,13 +108,18 @@ public final class PolarPaper extends JavaPlugin {
                 Polar.updateConfig(world, world.getKey().getKey());
                 Polar.saveWorldSynchronously(world);
             } catch (Exception e) {
+                // Nothing has been written, so the world's previous file is still the last complete one
                 getLogger().log(java.util.logging.Level.SEVERE,
-                        "Failed to save '" + world.getKey().getKey() + "' while stopping", e);
+                        "Failed to save '" + world.getKey().getKey() + "' while stopping, its previous file is untouched", e);
                 continue;
             }
             int ms = (int) ((System.nanoTime() - before) / 1_000_000);
             getLogger().info(String.format("Saved '%s' in %sms", world.getKey().getKey(), ms));
         }
+
+        // An autosave may have lined up a config write moments before shutdown, and the scheduler will not
+        // run it now that the plugin is stopping
+        Polar.flushPendingConfig();
     }
 
     /**

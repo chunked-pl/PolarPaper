@@ -10,13 +10,13 @@ import live.minehub.polarpaper.core.util.*;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
 import net.minecraft.core.Registry;
+import net.minecraft.core.RegistryAccess;
 import net.minecraft.core.SectionPos;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.util.BitStorage;
 import net.minecraft.util.Mth;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.LightLayer;
@@ -72,6 +72,9 @@ public record PolarChunk(
     private static final String DEFAULT_BIOME_PALETTE_ENTRY = "minecraft:plains";
     private static final int UNUSED_PALETTE_ENTRY = -1;
     private static final int NO_SECTION = -1;
+
+    /** The packed storage of a section that holds a single value throughout, which stores nothing per entry. */
+    private static final long[] ZERO_STORAGE = new long[0];
 
     public int @Nullable [] heightmap(int type) {
         return heightmaps[type];
@@ -160,8 +163,6 @@ public record PolarChunk(
      * @return The new PolarChunk, null if bukkit world chunk is empty
      */
     public static CompletableFuture<@Nullable PolarChunk> convert(World world, int chunkX, int chunkZ, PolarWorldAccess worldAccess, BlockSelector blockSelector, boolean saveLight, boolean loadChunks) {
-        CompletableFuture<@Nullable PolarChunk> future = new CompletableFuture<>();
-
         ServerLevel serverLevel = ((CraftWorld) world).getHandle();
 
         ChunkHolderManager chunkHolderManager = serverLevel.moonrise$getChunkTaskScheduler().chunkHolderManager;
@@ -169,47 +170,39 @@ public record PolarChunk(
         if (chunkHolder != null && chunkHolder.getCurrentChunk() != null) {
             if (isChunkEmpty(chunkHolder)) return CompletableFuture.completedFuture(null);
 
-            convertAsync(future, world, chunkHolder.getCurrentChunk(), chunkHolder.getEntityChunk(), worldAccess, blockSelector, saveLight);
-            return future;
+            return convertInternal(world, chunkHolder.getCurrentChunk(), chunkHolder.getEntityChunk(),
+                    worldAccess, blockSelector, saveLight, true);
         }
 
         // Chunk is not already loaded
 
         if (!loadChunks) return CompletableFuture.completedFuture(null);
 
+        CompletableFuture<@Nullable PolarChunk> future = new CompletableFuture<>();
+
         // FULL required when saving light; FEATURES sufficient otherwise
         ChunkStatus status = saveLight ? ChunkStatus.FULL : ChunkStatus.FEATURES;
         serverLevel.moonrise$getChunkTaskScheduler().scheduleChunkLoad(chunkX, chunkZ, status, true, Priority.LOW, chunkAccess -> {
-            NewChunkHolder loadedHolder = chunkHolderManager.getChunkHolder(chunkX, chunkZ);
-            if (isChunkEmpty(loadedHolder)) {
-                future.complete(null);
-                return;
-            }
+            // Anything thrown in here is thrown inside the chunk system, which would leave this future
+            // pending forever and hang the save that is waiting on it
+            try {
+                NewChunkHolder loadedHolder = chunkHolderManager.getChunkHolder(chunkX, chunkZ);
+                if (isChunkEmpty(loadedHolder)) {
+                    future.complete(null);
+                    return;
+                }
 
-            convertAsync(future, world, chunkAccess, loadedHolder.getEntityChunk(), worldAccess, blockSelector, saveLight);
+                convertInternal(world, chunkAccess, loadedHolder.getEntityChunk(), worldAccess, blockSelector, saveLight, true)
+                        .whenComplete((polarChunk, ex) -> {
+                            if (ex != null) future.completeExceptionally(ex);
+                            else future.complete(polarChunk);
+                        });
+            } catch (Throwable throwable) {
+                future.completeExceptionally(throwable);
+            }
         });
 
         return future;
-    }
-
-    /**
-     * Converts a chunk off the main thread, completing {@code target} with the result.
-     * <p>
-     * The conversion itself returns a future, so both of them have to be settled before {@code target} is;
-     * otherwise a failure part way through would leave whoever is waiting on it hanging forever.
-     */
-    private static void convertAsync(CompletableFuture<@Nullable PolarChunk> target, World world, ChunkAccess chunkAccess,
-                                     @Nullable ChunkEntitySlices entityChunk, PolarWorldAccess worldAccess,
-                                     BlockSelector blockSelector, boolean saveLight) {
-        CompletableFuture.supplyAsync(() -> convert(world, chunkAccess, entityChunk, worldAccess, blockSelector, saveLight))
-                .thenCompose(Function.identity())
-                .whenComplete((polarChunk, ex) -> {
-                    if (ex != null) {
-                        target.completeExceptionally(ex);
-                        return;
-                    }
-                    target.complete(polarChunk);
-                });
     }
 
     public static CompletableFuture<@Nullable PolarChunk> convert(World world, ChunkAccess chunkAccess, @Nullable ChunkEntitySlices entityChunk, PolarWorldAccess worldAccess, BlockSelector blockSelector, boolean saveLight) {
@@ -223,106 +216,215 @@ public record PolarChunk(
         return convertInternal(world, chunkAccess, entityChunk, worldAccess, blockSelector, saveLight, false).join();
     }
 
-    private static CompletableFuture<@Nullable PolarChunk> convertInternal(
+    /**
+     * Converts one chunk in two stages: a snapshot taken on the thread that owns the world, then the work of
+     * turning it into the saved form off that thread.
+     * <p>
+     * Everything that reads the live chunk happens inside the one main thread task, so nothing can change
+     * underneath it. Turning blocks into palette strings, compacting and repacking them is by far the more
+     * expensive half and touches nothing but the snapshot, so it stays off the main thread.
+     * <p>
+     * Failures are deliberately not swallowed here. A chunk that cannot be converted must fail the whole
+     * save, because writing the file without it would replace a good world with one that is missing part of
+     * itself.
+     */
+    private static CompletableFuture<PolarChunk> convertInternal(
             World world, ChunkAccess chunkAccess, @Nullable ChunkEntitySlices entityChunk,
             PolarWorldAccess worldAccess, BlockSelector blockSelector, boolean saveLight, boolean asyncFinish) {
-        int chunkX = chunkAccess.locX;
-        int chunkZ = chunkAccess.locZ;
-        ServerLevel serverLevel = ((CraftWorld) world).getHandle();
-        LevelLightEngine lightEngine = saveLight ? serverLevel.getLightEngine() : null;
+        CompletableFuture<ChunkSnapshot> snapshot = TaskFutures.runSync(worldAccess.getPlugin(),
+                () -> snapshotChunk(chunkAccess, entityChunk, worldAccess, blockSelector));
 
-        Registry<Biome> biomeRegistry = MinecraftServer.getServer().registryAccess().lookupOrThrow(Registries.BIOME);
+        Function<ChunkSnapshot, PolarChunk> buildChunk = chunkSnapshot ->
+                buildChunk(world, chunkAccess, worldAccess, blockSelector, saveLight, chunkSnapshot);
 
-        int sectionCount = chunkAccess.getSectionsCount();
-        int minSection = chunkAccess.getMinSectionY();
-
-        // Where a chunk's open sky begins is only known once it has been lit; an unlit one is saved without
-        // any light at all, so that whoever reads it back lights it themselves
-        boolean lit = chunkAccess.isLightCorrect();
-        int highestBlockSection = highestNonEmptySection(chunkAccess);
-
-        PolarSection[] sections = new PolarSection[sectionCount];
-        for (int i = 0; i < sectionCount; i++) {
-            LevelChunkSection chunkAccessSection = chunkAccess.getSection(i);
-            sections[i] = convertSection(chunkX, chunkZ, chunkAccessSection, biomeRegistry, blockSelector, minSection, i, lightEngine, lit && i > highestBlockSection);
-        }
-
-        var registryAccess = ((CraftServer) Bukkit.getServer()).getServer().registryAccess();
-        List<PolarChunk.BlockEntity> polarBlockEntities = new ArrayList<>();
-        Map<BlockPos, net.minecraft.world.level.block.entity.BlockEntity> blockEntities = new HashMap<>();
-
-        CompletableFuture<Void> future = TaskFutures.runSync(worldAccess.getPlugin(), () -> {
-            for (BlockPos blockPos : chunkAccess.getBlockEntitiesPos()) {
-                net.minecraft.world.level.block.entity.BlockEntity blockEntity = chunkAccess.getBlockEntity(blockPos);
-
-                if (blockEntity == null) continue;
-                if (!blockSelector.test(blockPos.getX(), blockPos.getY(), blockPos.getZ())) continue;
-
-                CompoundTag compoundTag = blockEntity.saveWithFullMetadata(registryAccess);
-
-                Optional<String> id = compoundTag.getString("id");
-                if (id.isEmpty()) {
-                    LOGGER.warn("No ID in block entity data at: {}", blockPos);
-                    LOGGER.warn("Compound tag: {}", compoundTag);
-                    continue;
-                }
-
-                int index = CoordConversion.chunkBlockIndex(blockPos.getX(), blockPos.getY(), blockPos.getZ());
-                polarBlockEntities.add(new BlockEntity(index, id.get(), compoundTag));
-                blockEntities.put(blockPos, blockEntity);
-            }
-            return null;
-        });
-
-        Function<Void, PolarChunk> finishConversion = _ -> {
-            int[][] heightMaps = new int[PolarChunk.MAX_HEIGHTMAPS][];
-            worldAccess.saveHeightmaps(chunkAccess, heightMaps);
-
-            ByteBuf userDataOutput = Unpooled.buffer();
-            List<net.minecraft.world.entity.Entity> allEntities = entityChunk == null ? List.of() : entityChunk.getAllEntities();
-            List<org.bukkit.entity.Entity> newAllEntities = new ArrayList<>();
-            for (net.minecraft.world.entity.Entity ent : allEntities) {
-                if (blockSelector.test(ent.getBlockX(), ent.getBlockY(), ent.getBlockZ())) newAllEntities.add(ent.getBukkitEntity());
-            }
-            org.bukkit.entity.Entity[] entitiesArray = newAllEntities.toArray(new org.bukkit.entity.Entity[0]);
-            worldAccess.saveChunkData(chunkAccess, blockEntities, entitiesArray, userDataOutput);
-            byte[] userData = ByteArrayUtil.outputArray(userDataOutput);
-
-            return new PolarChunk(
-                    chunkX,
-                    chunkZ,
-                    sections,
-                    polarBlockEntities.toArray(new BlockEntity[0]),
-                    heightMaps,
-                    userData
-            );
-        };
-
-        CompletableFuture<PolarChunk> converted = asyncFinish
-                ? future.thenApplyAsync(finishConversion)
-                : future.thenApply(finishConversion);
-        return converted.exceptionally(e -> {
-            LOGGER.error("Failed to convert chunk", e);
-            return null;
-        });
+        return asyncFinish
+                ? snapshot.thenApplyAsync(buildChunk)
+                : snapshot.thenApply(buildChunk);
     }
 
-    private static PolarSection convertSection(int chunkX, int chunkZ, LevelChunkSection chunkAccessSection, Registry<Biome> biomeRegistry, BlockSelector blockSelector, int minSection, int sectionI, @Nullable LevelLightEngine lightEngine, boolean openSky) {
+    /**
+     * Everything the saved chunk is built out of, read in one go while the world cannot change.
+     */
+    private record ChunkSnapshot(
+            int chunkX, int chunkZ,
+            int minSectionY,
+            boolean lightCorrect,
+            SectionSnapshot[] sections,
+            List<BlockEntity> polarBlockEntities,
+            Map<BlockPos, net.minecraft.world.level.block.entity.BlockEntity> blockEntities,
+            org.bukkit.entity.Entity[] entities,
+            int[][] heightmaps
+    ) {
+    }
+
+    /**
+     * One section's blocks and biomes, detached from the section they came from.
+     * <p>
+     * The packed storage is copied because the section keeps writing to its own; the palettes are resolved
+     * through {@link PolarChunk#snapshotPalette}, which explains why holding on to them is safe.
+     */
+    private record SectionSnapshot(
+            boolean onlyAir,
+            long[] blockStorage, int blockBits, IntFunction<BlockState> blockPalette,
+            long[] biomeStorage, List<Holder<Biome>> biomePalette
+    ) {
+        private static final SectionSnapshot ONLY_AIR =
+                new SectionSnapshot(true, ZERO_STORAGE, 0, _ -> null, ZERO_STORAGE, List.of());
+    }
+
+    /**
+     * Reads everything the conversion needs off the live chunk. Must run on the thread that owns the world.
+     */
+    private static ChunkSnapshot snapshotChunk(ChunkAccess chunkAccess, @Nullable ChunkEntitySlices entityChunk,
+                                               PolarWorldAccess worldAccess, BlockSelector blockSelector) {
+        int sectionCount = chunkAccess.getSectionsCount();
+        SectionSnapshot[] sections = new SectionSnapshot[sectionCount];
+        for (int i = 0; i < sectionCount; i++) {
+            sections[i] = snapshotSection(chunkAccess.getSection(i));
+        }
+
+        RegistryAccess registryAccess = ((CraftServer) Bukkit.getServer()).getServer().registryAccess();
+        List<PolarChunk.BlockEntity> polarBlockEntities = new ArrayList<>();
+        Map<BlockPos, net.minecraft.world.level.block.entity.BlockEntity> blockEntities = new HashMap<>();
+        for (BlockPos blockPos : chunkAccess.getBlockEntitiesPos()) {
+            net.minecraft.world.level.block.entity.BlockEntity blockEntity = chunkAccess.getBlockEntity(blockPos);
+
+            if (blockEntity == null) continue;
+            if (!blockSelector.test(blockPos.getX(), blockPos.getY(), blockPos.getZ())) continue;
+
+            CompoundTag compoundTag = blockEntity.saveWithFullMetadata(registryAccess);
+
+            Optional<String> id = compoundTag.getString("id");
+            if (id.isEmpty()) {
+                LOGGER.warn("No ID in block entity data at: {}", blockPos);
+                LOGGER.warn("Compound tag: {}", compoundTag);
+                continue;
+            }
+
+            int index = CoordConversion.chunkBlockIndex(blockPos.getX(), blockPos.getY(), blockPos.getZ());
+            polarBlockEntities.add(new BlockEntity(index, id.get(), compoundTag));
+            blockEntities.put(blockPos, blockEntity);
+        }
+
+        // Entity slices are not safe to walk while the world ticks, so the list is taken here even though the
+        // entities themselves are serialised later
+        List<org.bukkit.entity.Entity> entities = new ArrayList<>();
+        if (entityChunk != null) {
+            for (net.minecraft.world.entity.Entity entity : entityChunk.getAllEntities()) {
+                if (!blockSelector.test(entity.getBlockX(), entity.getBlockY(), entity.getBlockZ())) continue;
+                entities.add(entity.getBukkitEntity());
+            }
+        }
+
+        int[][] heightmaps = new int[PolarChunk.MAX_HEIGHTMAPS][];
+        worldAccess.saveHeightmaps(chunkAccess, heightmaps);
+
+        return new ChunkSnapshot(
+                chunkAccess.locX, chunkAccess.locZ,
+                chunkAccess.getMinSectionY(),
+                // Where a chunk's open sky begins is only known once it has been lit; an unlit one is saved
+                // without any light at all, so that whoever reads it back lights it themselves
+                chunkAccess.isLightCorrect(),
+                sections,
+                polarBlockEntities,
+                blockEntities,
+                entities.toArray(new org.bukkit.entity.Entity[0]),
+                heightmaps
+        );
+    }
+
+    @SuppressWarnings("unchecked")
+    private static SectionSnapshot snapshotSection(LevelChunkSection section) {
+        if (section.hasOnlyAir()) return SectionSnapshot.ONLY_AIR;
+
+        // Read once each: a section that grows past its palette width replaces this whole object, so reading
+        // the storage and the palette out of the same one keeps them describing the same blocks
+        PalettedContainer.Data<BlockState> blockData = section.getStates().data;
+        PalettedContainer.Data<Holder<Biome>> biomeData = ((PalettedContainer<Holder<Biome>>) section.getBiomes()).data;
+
+        Palette<Holder<Biome>> biomePalette = biomeData.palette();
+        List<Holder<Biome>> biomePaletteValues = new ArrayList<>(biomePalette.getSize());
+        for (int i = 0; i < biomePalette.getSize(); i++) {
+            biomePaletteValues.add(biomePalette.valueFor(i));
+        }
+
+        return new SectionSnapshot(
+                false,
+                blockData.storage().getRaw().clone(), blockData.storage().getBits(), snapshotPalette(blockData.palette()),
+                // Kept in the layout the game already packed it in, which readers recover exactly
+                biomeData.storage().getRaw().clone(), biomePaletteValues
+        );
+    }
+
+    /**
+     * A palette that can be read from any thread afterwards.
+     * <p>
+     * Ordinary palettes only ever gain entries, never reassign them, but the structure holding them is not
+     * safe to read while it grows, so the entries are copied out. A global palette is the whole block state
+     * registry: far too large to copy, and frozen once the server is up, so it is read directly.
+     */
+    private static IntFunction<BlockState> snapshotPalette(Palette<BlockState> palette) {
+        if (palette instanceof GlobalPalette<BlockState>) return palette::valueFor;
+
+        BlockState[] values = new BlockState[palette.getSize()];
+        for (int i = 0; i < values.length; i++) {
+            values[i] = palette.valueFor(i);
+        }
+        return index -> {
+            if (index < 0 || index >= values.length) {
+                throw new IllegalStateException("Block " + index + " is outside the section's " + values.length + " entry palette");
+            }
+            return values[index];
+        };
+    }
+
+    /**
+     * Turns a snapshot into the chunk as it is saved. Runs off the main thread, and reads nothing live.
+     */
+    private static PolarChunk buildChunk(World world, ChunkAccess chunkAccess, PolarWorldAccess worldAccess,
+                                         BlockSelector blockSelector, boolean saveLight, ChunkSnapshot snapshot) {
+        ServerLevel serverLevel = ((CraftWorld) world).getHandle();
+        LevelLightEngine lightEngine = saveLight ? serverLevel.getLightEngine() : null;
+        Registry<Biome> biomeRegistry = MinecraftServer.getServer().registryAccess().lookupOrThrow(Registries.BIOME);
+
+        SectionSnapshot[] sectionSnapshots = snapshot.sections();
+        int highestBlockSection = highestNonEmptySection(sectionSnapshots);
+
+        PolarSection[] sections = new PolarSection[sectionSnapshots.length];
+        for (int i = 0; i < sectionSnapshots.length; i++) {
+            sections[i] = convertSection(snapshot.chunkX(), snapshot.chunkZ(), sectionSnapshots[i], biomeRegistry,
+                    blockSelector, snapshot.minSectionY(), i, lightEngine,
+                    snapshot.lightCorrect() && i > highestBlockSection);
+        }
+
+        ByteBuf userDataOutput = Unpooled.buffer();
+        worldAccess.saveChunkData(chunkAccess, snapshot.blockEntities(), snapshot.entities(), userDataOutput);
+        byte[] userData = ByteArrayUtil.outputArray(userDataOutput);
+
+        return new PolarChunk(
+                snapshot.chunkX(),
+                snapshot.chunkZ(),
+                sections,
+                snapshot.polarBlockEntities().toArray(new BlockEntity[0]),
+                snapshot.heightmaps(),
+                userData
+        );
+    }
+
+    private static PolarSection convertSection(int chunkX, int chunkZ, SectionSnapshot section, Registry<Biome> biomeRegistry, BlockSelector blockSelector, int minSection, int sectionI, @Nullable LevelLightEngine lightEngine, boolean openSky) {
         int sectionY = minSection + sectionI;
         SectionLight light = readSectionLight(lightEngine, chunkX, sectionY, chunkZ, openSky);
 
-        if (chunkAccessSection.hasOnlyAir()) return createAirSection(light);
+        if (section.onlyAir()) return createAirSection(light);
 
         long[] biomeData;
         List<String> biomePaletteStrings = new ArrayList<>();
 
-        PalettedContainer.Data<BlockState> blockPaletteData = chunkAccessSection.getStates().data;
-        Palette<BlockState> sourcePalette = blockPaletteData.palette();
-
-        // Read the blocks out as plain indices. Working on a copy of the section's own data rather than the
-        // live storage, so masking and compacting cannot disturb the world being saved.
-        int[] blockIndices = readIndices(blockPaletteData.storage());
-        List<String> blockPaletteStrings = compactPalette(index -> BlockStateCodec.toPaletteString(sourcePalette.valueFor(index)), blockIndices);
+        // Working on the snapshot's own copy of the blocks, so masking and compacting cannot disturb the
+        // world being saved
+        IntFunction<BlockState> sourcePalette = section.blockPalette();
+        int[] blockIndices = unpackIndices(section.blockStorage(), section.blockBits());
+        List<String> blockPaletteStrings = compactPalette(index -> BlockStateCodec.toPaletteString(sourcePalette.apply(index)), blockIndices);
 
         if (!blockSelector.containsEntireSection(chunkX, chunkZ, sectionY)) {
             int airIndex = blockPaletteStrings.indexOf(AIR_PALETTE_ENTRY);
@@ -347,14 +449,11 @@ public record PolarChunk(
 
         // Resolved by index rather than by filtering the palette: dropping an entry that cannot be read would
         // shift every later index, silently reassigning the biome of every block that referenced them.
-        PalettedContainer.Data<Holder<Biome>> biomePaletteData = ((PalettedContainer<Holder<Biome>>)chunkAccessSection.getBiomes()).data;
-        Palette<Holder<Biome>> sourceBiomePalette = biomePaletteData.palette();
-        for (int i = 0; i < sourceBiomePalette.getSize(); i++) {
-            biomePaletteStrings.add(biomeKeyOrDefault(biomeRegistry, sourceBiomePalette.valueFor(i)));
+        for (Holder<Biome> biome : section.biomePalette()) {
+            biomePaletteStrings.add(biomeKeyOrDefault(biomeRegistry, biome));
         }
 
-        // Kept in the layout the game already packed it in, which readers recover exactly
-        biomeData = biomePaletteData.storage().getRaw().clone();
+        biomeData = section.biomeStorage();
 
         // sanity check
         if (biomeData.length == 0 && biomePaletteStrings.size() > 1) {
@@ -429,10 +528,9 @@ public record PolarChunk(
      * The index of the highest section holding blocks, or {@link #NO_SECTION} for a chunk that is only air.
      * Everything above it is open sky.
      */
-    private static int highestNonEmptySection(ChunkAccess chunkAccess) {
-        LevelChunkSection[] sections = chunkAccess.getSections();
+    private static int highestNonEmptySection(SectionSnapshot[] sections) {
         for (int sectionIndex = sections.length - 1; sectionIndex >= 0; sectionIndex--) {
-            if (!sections[sectionIndex].hasOnlyAir()) return sectionIndex;
+            if (!sections[sectionIndex].onlyAir()) return sectionIndex;
         }
         return NO_SECTION;
     }
@@ -476,11 +574,19 @@ public record PolarChunk(
         return DEFAULT_BIOME_PALETTE_ENTRY;
     }
 
-    private static int[] readIndices(BitStorage storage) {
-        int[] indices = new int[storage.getSize()];
-        for (int i = 0; i < indices.length; i++) {
-            indices[i] = storage.get(i);
-        }
+    /**
+     * The palette index of every block of a section, unpacked from the copy the snapshot took.
+     * <p>
+     * Laid out exactly as the game packs it: whole entries per long, with the leftover top bits unused, so
+     * this recovers the same indices the section itself would report.
+     */
+    private static int[] unpackIndices(long[] storage, int bits) {
+        int[] indices = new int[PolarSection.BLOCK_PALETTE_SIZE];
+        // A section holding a single block throughout stores nothing per block, so every index is its first
+        // and only palette entry
+        if (bits == 0 || storage.length == 0) return indices;
+
+        PaletteUtil.unpack(indices, storage, bits);
         return indices;
     }
 

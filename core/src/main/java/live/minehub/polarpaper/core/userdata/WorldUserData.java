@@ -12,10 +12,15 @@ public class WorldUserData {
     private static final byte CURRENT_FEATURES_VERSION = 1;
     private static final byte SCHEMATIC_CENTER_VERSION = 1;
 
-    public static @Nullable Vector3i readSchematicOffset(byte[] userData) {
-        if (userData.length == 0) return null;
+    /** A version byte followed by the three coordinates. */
+    private static final int SCHEMATIC_CENTER_BYTES = 1 + Integer.BYTES * 3;
 
-        final var bb = ByteBuffer.wrap(userData);
+    public static @Nullable Vector3i readSchematicOffset(byte[] userData) {
+        // Read straight out of a file, so a truncated or foreign one must report "no center" rather than
+        // throwing at whoever asked
+        if (userData.length < SCHEMATIC_CENTER_BYTES) return null;
+
+        ByteBuffer bb = ByteBuffer.wrap(userData);
 
         byte version = bb.get();
         if (version < SCHEMATIC_CENTER_VERSION) return null;

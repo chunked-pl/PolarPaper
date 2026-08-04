@@ -16,6 +16,7 @@ import live.minehub.polarpaper.core.world.BlockSelector;
 import live.minehub.polarpaper.core.world.PolarWorld;
 import live.minehub.polarpaper.core.world.PolarWriter;
 import live.minehub.polarpaper.nms.VersionUtil;
+import live.minehub.polarpaper.util.WorldKey;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.event.ClickEvent;
 import net.kyori.adventure.text.event.HoverEvent;
@@ -66,6 +67,9 @@ public class ConvertCommand extends PolarCmd {
             sender.sendMessage(Component.text("Invalid world name", NamedTextColor.RED));
             return Command.SINGLE_SUCCESS;
         }
+
+        // The name becomes a file name in the worlds folder, so it must not be able to point outside it
+        if (WorldKey.validatePath(sender, newWorldName) == null) return Command.SINGLE_SUCCESS;
 
         PolarGenerator polarGenerator = PolarGenerator.fromWorld(bukkitWorld);
         if (polarGenerator != null) {

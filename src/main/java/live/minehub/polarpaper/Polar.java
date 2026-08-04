@@ -23,12 +23,18 @@ import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 @SuppressWarnings("unused")
 public class Polar {
@@ -37,6 +43,11 @@ public class Polar {
 
     private static final Set<NamespacedKey> LOADING_WORLDS = new CopyOnWriteArraySet<>();
     private static final Map<NamespacedKey, BukkitTask> AUTOSAVE_TASK_MAP = new ConcurrentHashMap<>();
+
+    /** The config file as it should next be written, or null once whoever is writing has taken it. */
+    private static final AtomicReference<String> PENDING_CONFIG = new AtomicReference<>();
+    private static final AtomicBoolean CONFIG_WRITE_SCHEDULED = new AtomicBoolean();
+    private static final Object CONFIG_WRITE_LOCK = new Object();
 
     private Polar() {
 
@@ -362,7 +373,11 @@ public class Polar {
                         .whenComplete((_, e) -> {
                             saveInProgress.set(false);
                             if (e != null) {
-                                String errorMsg = String.format("Failed to save '%s', please check logs for error", world.getKey().getKey());
+                                // Nothing has been written: a save that cannot be completed in full leaves the
+                                // previous file alone rather than replacing a whole world with part of one
+                                String errorMsg = String.format(
+                                        "Failed to save '%s', its previous file is untouched. Please check logs for error",
+                                        world.getKey().getKey());
                                 LOGGER.error(errorMsg, e);
                                 for (Player plr : Bukkit.getOnlinePlayers()) {
                                     if (!plr.hasPermission("polar.notifications")) continue;
@@ -395,20 +410,110 @@ public class Polar {
 
     /**
      * Writes this world's properties to config (e.g. gamerules)
-     * Should only be called synchronously
+     * <p>
+     * Must be called synchronously, as it reads the world's live state. Everything that touches the disk is
+     * kept off the calling thread, because this runs on every autosave of every world.
      */
     public static Config updateConfig(World world, String worldName) {
-        PolarPaper.getPlugin().reloadConfig();
         FileConfiguration fileConfig = PolarPaper.getPlugin().getConfig();
         Config defaultConfig = Config.getDefaultConfig(fileConfig);
-        Config newConfig = Config.readFromConfig(fileConfig, worldName, defaultConfig.toBuilder()).toBuilder().fromWorld(world).build(); // If world not in config, use defaults
 
-        Config.writeToConfig(PolarPaper.getConfigPath(), fileConfig, worldName, newConfig);
+        // Read from the config the plugin already holds rather than from the file. This used to reload the
+        // file first, which parsed the whole of it on the main thread on every autosave, and the only thing
+        // that gained was picking up hand written edits, which is what /polar reloadconfig is for.
+        Config storedConfig = Config.readFromConfig(fileConfig, worldName, defaultConfig.toBuilder()); // If world not in config, use defaults
+        Config newConfig = storedConfig.toBuilder().fromWorld(world).build();
 
         PolarGenerator generator = PolarGenerator.fromWorld(world);
         if (generator != null) generator.setConfig(newConfig);
 
+        // An autosave almost never changes a world's settings, and rewriting the file to say exactly what it
+        // already says is the whole cost of this method. A world that has no entry yet is always written, so
+        // that it appears in the file even when every one of its settings is the default one.
+        if (Config.isInConfig(fileConfig, worldName) && newConfig.equals(storedConfig)) return newConfig;
+
+        Config.applyToConfig(fileConfig, worldName, newConfig);
+        saveConfigFile(fileConfig.saveToString());
+
         return newConfig;
+    }
+
+    /**
+     * Writes config.yml, off the calling thread while the server is running.
+     * <p>
+     * Each of these is the whole file, so a newer one supersedes anything still waiting and only the latest
+     * has to reach the disk. While the plugin is disabling nothing else will get to run, so it is written
+     * there and then instead.
+     */
+    private static void saveConfigFile(String contents) {
+        PENDING_CONFIG.set(contents);
+
+        if (!PolarPaper.getPlugin().isEnabled()) {
+            writePendingConfig();
+            return;
+        }
+
+        if (!CONFIG_WRITE_SCHEDULED.compareAndSet(false, true)) return;
+        try {
+            Bukkit.getScheduler().runTaskAsynchronously(PolarPaper.getPlugin(), () -> {
+                CONFIG_WRITE_SCHEDULED.set(false);
+                writePendingConfig();
+            });
+        } catch (Throwable throwable) {
+            // The plugin stopped being able to schedule between the check above and here, so it is this
+            // thread's job after all. Losing the write would lose the world's settings.
+            CONFIG_WRITE_SCHEDULED.set(false);
+            writePendingConfig();
+        }
+    }
+
+    /**
+     * Writes the config file straight away if a write is still waiting to happen.
+     * <p>
+     * Meant for shutdown: the scheduler drops queued asynchronous tasks when the plugin stops, so a write
+     * that an autosave lined up moments earlier would otherwise never reach the disk.
+     */
+    public static void flushPendingConfig() {
+        writePendingConfig();
+    }
+
+    private static void writePendingConfig() {
+        // Taken under the lock so that two writers can never hold two different versions at once and race to
+        // put the older one down last
+        synchronized (CONFIG_WRITE_LOCK) {
+            String contents = PENDING_CONFIG.getAndSet(null);
+            if (contents == null) return;
+
+            try {
+                writeAtomically(PolarPaper.getConfigPath(), contents);
+            } catch (Exception e) {
+                LOGGER.error("Failed to write the config file", e);
+            }
+        }
+    }
+
+    /**
+     * Replaces a file in one step, so that a server dying mid-write cannot leave behind half a config file
+     * for every world to then load its settings from.
+     */
+    private static void writeAtomically(Path path, String contents) throws IOException {
+        Path parent = path.toAbsolutePath().getParent();
+        if (parent == null) throw new IOException("Config file must have a parent directory: " + path);
+
+        Files.createDirectories(parent);
+        Path temporary = Files.createTempFile(parent, path.getFileName().toString(), ".tmp");
+        boolean moved = false;
+        try {
+            Files.writeString(temporary, contents, StandardCharsets.UTF_8);
+            try {
+                Files.move(temporary, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            } catch (AtomicMoveNotSupportedException _) {
+                Files.move(temporary, path, StandardCopyOption.REPLACE_EXISTING);
+            }
+            moved = true;
+        } finally {
+            if (!moved) Files.deleteIfExists(temporary);
+        }
     }
 
     /**
@@ -493,6 +598,7 @@ public class Polar {
                 : generator.getPolarWorld().chunks();
         PolarWorld polarWorld = PolarWorld.convertSynchronously(
                 world, generator.getWorldAccess(), blockSelector, config, extraChunks);
+        polarWorld.userData(generator.getUserData());
         generator.getSource().saveBytes(PolarWriter.write(polarWorld));
     }
 
@@ -517,6 +623,10 @@ public class Polar {
                 config.spawn().getBlockX(), config.spawn().getBlockZ(), config.worldRadiusBlocks());
         BlockSelector boundedSelector = BlockSelector.intersection(blockSelector, radiusSelector);
 
+        // Converting only looks at chunks, so the world level user data has to be carried across by hand
+        PolarGenerator generator = PolarGenerator.fromWorld(world);
+        byte[] worldUserData = generator == null ? new byte[0] : generator.getUserData();
+
         CompletableFuture<PolarWorld> future;
         try {
             future = PolarWorld.convert(world, polarWorldAccess, boundedSelector, config, extraChunks, false);
@@ -525,6 +635,7 @@ public class Polar {
         }
 
         return future.thenAcceptAsync(newPolarWorld -> {
+            newPolarWorld.userData(worldUserData);
             byte[] worldBytes = PolarWriter.write(newPolarWorld);
             try {
                 polarSource.saveBytes(worldBytes);
