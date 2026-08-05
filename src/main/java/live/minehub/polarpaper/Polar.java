@@ -293,9 +293,12 @@ public class Polar {
         PolarStreamingGenerator generator = streamingGeneratorOf(world);
         if (generator == null) return CompletableFuture.completedFuture(false);
 
+        // The position stays archived for the whole of this method. Expanding the chunk takes long enough
+        // that a save can start in the middle, and a position that had already left the archive but was not
+        // live yet would be written to neither half of the file: the chunk would come back as air.
         byte[] body;
         try {
-            body = generator.getChunkArchive().take(chunkX, chunkZ);
+            body = generator.getChunkArchive().claim(chunkX, chunkZ);
         } catch (RuntimeException failure) {
             return CompletableFuture.failedFuture(failure);
         }
@@ -304,7 +307,7 @@ public class Polar {
         Short version = generator.getVersion();
         Integer dataVersion = generator.getDataVersion();
         if (version == null || dataVersion == null) {
-            generator.getChunkArchive().restore(chunkX, chunkZ);
+            generator.getChunkArchive().abandon(chunkX, chunkZ);
             return CompletableFuture.failedFuture(new IllegalStateException(
                     "World " + world.getKey() + " has archived chunks but was never read from polar data"));
         }
@@ -331,10 +334,9 @@ public class Polar {
                         PolarStreamLoader.replaceChunkBlocks(level, world, existing, prepared.levelChunk(),
                                 prepared.chunk(), generator.getWorldAccess(), blockSelector);
                         generator.clearPlaceholderChunk(chunkX, chunkZ);
+                        generator.getChunkArchive().release(chunkX, chunkZ);
                         return true;
                     }
-
-                    generator.clearPlaceholderChunk(chunkX, chunkZ);
 
                     for (PolarChunk.BlockEntity blockEntity : prepared.chunk().blockEntities()) {
                         if (!PolarStreamLoader.isBlockEntitySelected(blockEntity, blockSelector, chunkX, chunkZ)) continue;
@@ -343,10 +345,12 @@ public class Polar {
                     prepared.levelChunk().tryMarkSaved();
                     PolarStreamLoader.insertChunk(level, prepared.levelChunk());
                     generator.getWorldAccess().loadChunkData(world, prepared.levelChunk(), prepared.chunk().userData(), blockSelector);
+                    generator.clearPlaceholderChunk(chunkX, chunkZ);
+                    generator.getChunkArchive().release(chunkX, chunkZ);
                     return true;
                 }))
                 .whenComplete((_, failure) -> {
-                    if (failure != null) generator.getChunkArchive().restore(chunkX, chunkZ);
+                    if (failure != null) generator.getChunkArchive().abandon(chunkX, chunkZ);
                 });
     }
 

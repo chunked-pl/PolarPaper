@@ -73,19 +73,34 @@ final class PolarChunkArchiveTest {
     }
 
     @Test
-    void takeReturnsTheStoredBodyAndReleasesThePosition() {
+    void claimReturnsTheStoredBodyAndKeepsThePosition() {
         Fixture fixture = Fixture.build();
         long position = fixture.anyArchived();
         int chunkX = CoordConversion.chunkX(position);
         int chunkZ = CoordConversion.chunkZ(position);
         int held = fixture.archive.size();
 
-        byte[] body = fixture.archive.take(chunkX, chunkZ);
+        byte[] body = fixture.archive.claim(chunkX, chunkZ);
 
         assertArrayEquals(fixture.original.get(position), body);
-        assertEquals(held - 1, fixture.archive.size());
-        assertFalse(fixture.archive.contains(chunkX, chunkZ));
-        assertNull(fixture.archive.take(chunkX, chunkZ), "the same chunk was handed out twice");
+        assertEquals(held, fixture.archive.size(), "claiming must not give up the position");
+        assertTrue(fixture.archive.contains(chunkX, chunkZ));
+        assertNull(fixture.archive.claim(chunkX, chunkZ), "the same chunk was handed out twice");
+    }
+
+    @Test
+    void keepsAClaimedChunkInTheFileUntilItIsActuallyLive() {
+        Fixture fixture = Fixture.build();
+        long position = fixture.anyArchived();
+
+        fixture.archive.claim(CoordConversion.chunkX(position), CoordConversion.chunkZ(position));
+
+        Map<Long, byte[]> written = bodies(fixture.save());
+
+        assertEquals(fixture.original.size(), written.size(),
+                "a chunk being expanded was written to neither the archive nor the world");
+        assertArrayEquals(fixture.original.get(position), written.get(position),
+                "the chunk came back as something other than what it was");
     }
 
     @Test
@@ -94,8 +109,8 @@ final class PolarChunkArchiveTest {
         long position = fixture.anyArchived();
 
         PolarChunkArchive.Snapshot snapshot = fixture.archive.snapshot();
-        fixture.archive.take(CoordConversion.chunkX(position), CoordConversion.chunkZ(position));
-        fixture.makeLive(position);
+        fixture.archive.claim(CoordConversion.chunkX(position), CoordConversion.chunkZ(position));
+        fixture.goLive(position);
 
         Map<Long, byte[]> written = bodies(fixture.save(snapshot));
 
@@ -105,16 +120,18 @@ final class PolarChunkArchiveTest {
     }
 
     @Test
-    void restorePutsAChunkBackAfterMakingItLiveFailed() {
+    void abandonLeavesTheChunkArchivedAfterMakingItLiveFailed() {
         Fixture fixture = Fixture.build();
         long position = fixture.anyArchived();
         int chunkX = CoordConversion.chunkX(position);
         int chunkZ = CoordConversion.chunkZ(position);
 
-        fixture.archive.take(chunkX, chunkZ);
-        fixture.archive.restore(chunkX, chunkZ);
+        fixture.archive.claim(chunkX, chunkZ);
+        fixture.archive.abandon(chunkX, chunkZ);
 
         assertTrue(fixture.archive.contains(chunkX, chunkZ));
+        assertArrayEquals(fixture.original.get(position), fixture.archive.claim(chunkX, chunkZ),
+                "an abandoned chunk could not be claimed again");
         assertEquals(fixture.original.size(), bodies(fixture.save()).size());
     }
 
@@ -139,8 +156,8 @@ final class PolarChunkArchiveTest {
         Fixture fixture = Fixture.build();
         for (long position : List.copyOf(fixture.original.keySet())) {
             if (fixture.live.contains(position)) continue;
-            fixture.archive.take(CoordConversion.chunkX(position), CoordConversion.chunkZ(position));
-            fixture.makeLive(position);
+            fixture.archive.claim(CoordConversion.chunkX(position), CoordConversion.chunkZ(position));
+            fixture.goLive(position);
         }
 
         assertTrue(fixture.archive.isEmpty());
@@ -191,8 +208,9 @@ final class PolarChunkArchiveTest {
             throw new IllegalStateException("nothing is archived");
         }
 
-        void makeLive(long position) {
+        void goLive(long position) {
             this.live.add(position);
+            this.archive.release(CoordConversion.chunkX(position), CoordConversion.chunkZ(position));
         }
 
         byte[] save() {

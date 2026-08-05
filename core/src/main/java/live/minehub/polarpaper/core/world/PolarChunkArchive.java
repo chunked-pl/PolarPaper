@@ -20,6 +20,7 @@ public final class PolarChunkArchive {
     private static final int POSITIONS_IN_MESSAGE = 4;
 
     private final Set<Long> positions = ConcurrentHashMap.newKeySet();
+    private final Set<Long> claimed = ConcurrentHashMap.newKeySet();
     private volatile @Nullable PolarSource source;
 
     public void bindSource(@Nullable PolarSource source) {
@@ -34,9 +35,6 @@ public final class PolarChunkArchive {
         this.positions.add(CoordConversion.chunkIndex(chunkX, chunkZ));
     }
 
-    public void restore(int chunkX, int chunkZ) {
-        this.positions.add(CoordConversion.chunkIndex(chunkX, chunkZ));
-    }
 
     public boolean contains(int chunkX, int chunkZ) {
         return this.positions.contains(CoordConversion.chunkIndex(chunkX, chunkZ));
@@ -54,9 +52,24 @@ public final class PolarChunkArchive {
         return (long) this.positions.size() * BYTES_PER_POSITION;
     }
 
-    public byte @Nullable [] take(int chunkX, int chunkZ) {
+    /**
+     * Reads the body of an archived chunk without giving up the archive's claim on it.
+     * <p>
+     * The position stays archived, so a save that happens while the caller is still expanding the chunk
+     * writes the archived body and the chunk survives. The caller hands the position over with
+     * {@link #release} at the moment the chunk becomes live, or drops its claim with {@link #abandon} if
+     * making it live failed. Only one caller at a time holds a claim on a position.
+     *
+     * @return the chunk body, or null if the position is not archived or is already claimed
+     */
+    public byte @Nullable [] claim(int chunkX, int chunkZ) {
         long position = CoordConversion.chunkIndex(chunkX, chunkZ);
-        if (!this.positions.remove(position)) return null;
+        if (!this.positions.contains(position)) return null;
+        if (!this.claimed.add(position)) return null;
+        if (!this.positions.contains(position)) {
+            this.claimed.remove(position);
+            return null;
+        }
 
         try {
             byte[][] body = new byte[1][];
@@ -67,9 +80,29 @@ public final class PolarChunkArchive {
             });
             return body[0];
         } catch (RuntimeException | Error failure) {
-            this.positions.add(position);
+            this.claimed.remove(position);
             throw failure;
         }
+    }
+
+    /**
+     * Drops a claimed position, because the chunk it holds is now live in the world.
+     * <p>
+     * Must run in the same unit of work that makes the chunk live: between this call and the chunk being
+     * visible, the position is in neither the archive nor the world, and a save landing there would write
+     * the world without it.
+     */
+    public void release(int chunkX, int chunkZ) {
+        long position = CoordConversion.chunkIndex(chunkX, chunkZ);
+        this.positions.remove(position);
+        this.claimed.remove(position);
+    }
+
+    /**
+     * Gives up a claim without making the chunk live, leaving the position archived.
+     */
+    public void abandon(int chunkX, int chunkZ) {
+        this.claimed.remove(CoordConversion.chunkIndex(chunkX, chunkZ));
     }
 
     public @NotNull Snapshot snapshot() {
