@@ -11,7 +11,6 @@ import ca.spottedleaf.moonrise.patches.starlight.light.StarLightEngine;
 import ca.spottedleaf.moonrise.patches.starlight.light.StarLightInterface;
 import com.mojang.logging.LogUtils;
 import io.netty.buffer.ByteBuf;
-import io.netty.buffer.Unpooled;
 import live.minehub.polarpaper.core.generator.PolarGenerator;
 import live.minehub.polarpaper.core.generator.PolarStreamingGenerator;
 import live.minehub.polarpaper.core.source.PolarSource;
@@ -147,48 +146,23 @@ public class PolarStreamLoader {
             throw new IllegalArgumentException("A residency that leaves chunks out needs an archive to keep them in");
         }
 
-        ByteBuf bb = Unpooled.wrappedBuffer(data);
-
-        int magic = bb.readInt();
-        assertThat(magic == PolarConstants.MAGIC_NUMBER, "Invalid magic number");
-
-        short version = bb.readShort();
-        PolarReader.validateVersion(version);
-
         PolarGenerator polarGenerator = PolarGenerator.fromWorld(world);
         if (polarGenerator == null) return CompletableFuture.completedFuture(null);
         if (!(polarGenerator instanceof PolarStreamingGenerator voidGenerator)) return CompletableFuture.completedFuture(null);
+
+        PolarContentReader.Content content = PolarContentReader.open(data, dataConverter);
+        short version = content.version();
+        ByteBuf uncompressed = content.body();
+
         voidGenerator.setVersion(version);
+        voidGenerator.setDataVersion(content.dataVersion());
+        voidGenerator.setUserData(content.userData());
 
-        int dataVersion = version >= PolarConstants.VERSION_DATA_CONVERTER
-                ? getVarInt(bb)
-                : dataConverter.defaultDataVersion();
-
-        voidGenerator.setDataVersion(dataVersion);
-
-        byte compressionByte = bb.readByte();
-        PolarWorld.CompressionType compression = PolarWorld.CompressionType.fromId(compressionByte);
-        assertThat(compression != null, "Invalid compression type");
-
-        int compressedDataLength = getVarInt(bb);
-
-        // Replace the buffer with a "decompressed" version.
-        ByteBuf uncompressed = PolarReader.decompressBuffer(bb, compression, compressedDataLength);
-
-        byte minSection = uncompressed.readByte();
-        byte maxSection = uncompressed.readByte();
-        assertThat(minSection < maxSection, "Invalid section range");
-
-        // User (world) data
-        byte[] userData = new byte[0];
-        if (version > PolarConstants.VERSION_WORLD_USERDATA) {
-            userData = live.minehub.polarpaper.core.util.ByteArrayUtil.getByteArray(uncompressed);
-        }
-
-        voidGenerator.setUserData(userData);
-
-        int chunkCount = getVarInt(uncompressed);
-        validateChunkCount(chunkCount, uncompressed, maxSection - minSection + 1);
+        int dataVersion = content.dataVersion();
+        int chunkCount = content.chunkCount();
+        byte minSection = content.minSection();
+        byte maxSection = content.maxSection();
+        validateChunkCount(chunkCount, uncompressed, content.sectionCount());
 
         List<CompletableFuture<Void>> futures = new ArrayList<>(Math.min(chunkCount, 4096));
         Throwable readFailure = null;
@@ -238,9 +212,11 @@ public class PolarStreamLoader {
             return null;
         }
 
-        // Part of the world, but not wanted live yet: keep the bytes as they are and move on
+        // Part of the world, but not wanted live yet: it stays where it is, in the file, and the archive
+        // remembers only that this world is still counting on it
         if (archive != null && !residency.shouldLoad(chunkX, chunkZ)) {
-            archive.store(chunkX, chunkZ, readChunkBodyBytes(version, bb, sectionCount));
+            archive.markArchived(chunkX, chunkZ);
+            PolarReader.skipChunkBody(version, bb, sectionCount);
             return null;
         }
 
@@ -300,21 +276,6 @@ public class PolarStreamLoader {
                     chunkLight.applyTo(serverLevel, newLevelChunk);
                     return null;
                 }));
-    }
-
-    /**
-     * Consumes a chunk body and hands back the exact bytes it occupied, for an archive to keep.
-     * <p>
-     * Copied rather than referenced, so that the whole decompressed world can be released once loading is
-     * over instead of being pinned by whichever chunks were kept.
-     */
-    private static byte @NotNull [] readChunkBodyBytes(short version, @NotNull ByteBuf bb, int sectionCount) {
-        int start = bb.readerIndex();
-        PolarReader.skipChunkBody(version, bb, sectionCount);
-
-        byte[] body = new byte[bb.readerIndex() - start];
-        bb.getBytes(start, body);
-        return body;
     }
 
     /**

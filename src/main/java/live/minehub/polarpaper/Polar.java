@@ -188,6 +188,9 @@ public class Polar {
         }
 
         PolarStreamingGenerator generator = new PolarStreamingGenerator(config, source, worldAccess);
+        // The chunks left out stay in this source rather than on the heap, so the archive has to be able to
+        // reach it for as long as the world is loaded
+        generator.getChunkArchive().bindSource(source);
         return createWorld(generator, worldName).thenComposeAsync(world -> {
             if (world == null) return CompletableFuture.completedFuture(null);
 
@@ -292,14 +295,20 @@ public class Polar {
         PolarStreamingGenerator generator = streamingGeneratorOf(world);
         if (generator == null) return CompletableFuture.completedFuture(false);
 
-        // Removed from the archive as it is read, so that saving never writes the same chunk twice
-        byte[] body = generator.getChunkArchive().take(chunkX, chunkZ);
+        // Removed from the archive as it is read, so that saving never writes the same chunk twice. A read
+        // that fails throws with the position already put back, rather than reporting an absent chunk.
+        byte[] body;
+        try {
+            body = generator.getChunkArchive().take(chunkX, chunkZ);
+        } catch (RuntimeException failure) {
+            return CompletableFuture.failedFuture(failure);
+        }
         if (body == null) return CompletableFuture.completedFuture(false);
 
         Short version = generator.getVersion();
         Integer dataVersion = generator.getDataVersion();
         if (version == null || dataVersion == null) {
-            generator.getChunkArchive().store(chunkX, chunkZ, body);
+            generator.getChunkArchive().restore(chunkX, chunkZ);
             return CompletableFuture.failedFuture(new IllegalStateException(
                     "World " + world.getKey() + " has archived chunks but was never read from polar data"));
         }
@@ -342,8 +351,8 @@ public class Polar {
                 }))
                 .whenComplete((_, failure) -> {
                     // Put it back rather than lose it: a chunk that could not be expanded is still the
-                    // player's build, and the archive is the only copy of it the world has
-                    if (failure != null) generator.getChunkArchive().store(chunkX, chunkZ, body);
+                    // player's build, and the file is the only copy of it the world has
+                    if (failure != null) generator.getChunkArchive().restore(chunkX, chunkZ);
                 });
     }
 
@@ -740,7 +749,7 @@ public class Polar {
 
         Config config = generator.getConfig();
         BlockSelector blockSelector = generator.getWorldBlockSelector();
-        List<PolarChunkArchive.ArchivedChunk> archiveSnapshot = generator.getChunkArchive().snapshot();
+        PolarChunkArchive.Snapshot archiveSnapshot = generator.getChunkArchive().snapshot();
         Collection<PolarChunk> extraChunks = generator.getPolarWorld() == null
                 ? List.of()
                 : generator.getPolarWorld().chunks();
@@ -748,8 +757,9 @@ public class Polar {
                 world, generator.getWorldAccess(), blockSelector, config, extraChunks);
         polarWorld.userData(generator.getUserData());
         dropPlaceholderChunks(polarWorld, generator);
-        generator.getSource().saveBytes(
-                PolarWriter.write(polarWorld, PolarDataConverter.DEFAULT, archiveSnapshot));
+        PolarSource source = generator.getSource();
+        source.saveBytes(PolarWriter.write(polarWorld, PolarDataConverter.DEFAULT, archiveSnapshot));
+        generator.getChunkArchive().bindSource(source);
     }
 
     /**
@@ -780,8 +790,9 @@ public class Polar {
         // drop it from both and lose it from the file.
         PolarGenerator generator = PolarGenerator.fromWorld(world);
         byte[] worldUserData = generator == null ? new byte[0] : generator.getUserData();
-        List<PolarChunkArchive.ArchivedChunk> archiveSnapshot =
-                generator == null ? List.of() : generator.getChunkArchive().snapshot();
+        PolarChunkArchive.Snapshot archiveSnapshot = generator == null
+                ? PolarChunkArchive.Snapshot.EMPTY
+                : generator.getChunkArchive().snapshot();
 
         CompletableFuture<PolarWorld> future;
         try {
@@ -793,12 +804,17 @@ public class Polar {
         return future.thenAcceptAsync(newPolarWorld -> {
             newPolarWorld.userData(worldUserData);
             if (generator != null) dropPlaceholderChunks(newPolarWorld, generator);
+            // Reading the archived bodies happens in here, so a source that cannot be read throws before
+            // there is anything to write and leaves the file already on disk as the newest complete copy
             byte[] worldBytes = PolarWriter.write(newPolarWorld, PolarDataConverter.DEFAULT, archiveSnapshot);
             try {
                 polarSource.saveBytes(worldBytes);
             } catch (Exception e) {
                 throw new RuntimeException(e);
             }
+            // The archived chunks are in this file now. Only after the write succeeded, or a failed save
+            // would leave the archive reading from somewhere the world was never written.
+            if (generator != null) generator.getChunkArchive().bindSource(polarSource);
         });
     }
 

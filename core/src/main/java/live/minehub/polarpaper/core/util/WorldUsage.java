@@ -113,15 +113,15 @@ public record WorldUsage(
                 + (long) sectionsWithBlocks * POPULATED_SECTION_OVERHEAD_BYTES
                 + (long) (sections - sectionsWithBlocks) * EMPTY_SECTION_OVERHEAD_BYTES;
 
-        // Chunks kept compressed instead of live are part of what the world costs, even though nothing in
-        // the loops above ever sees them
+        // Chunks left in the file instead of made live cost this world their positions and nothing else,
+        // which is worth reporting precisely because it is so much less than being live would cost
         PolarGenerator generator = PolarGenerator.fromWorld(world);
         PolarChunkArchive archive = generator == null ? null : generator.getChunkArchive();
 
         return new WorldUsage(chunks, sections, sectionsWithBlocks, blockBytes, biomeBytes, lightBytes,
                 heightmapBytes, overheadBytes, blockEntities, world.getEntityCount(),
                 archive == null ? 0 : archive.size(),
-                archive == null ? 0L : archive.compressedBytes());
+                archive == null ? 0L : archive.retainedBytes());
     }
 
     @SuppressWarnings("unchecked")
