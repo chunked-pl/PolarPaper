@@ -25,19 +25,9 @@ public class PolarWriter {
 
     private static final int CHUNK_SECTION_SIZE = 16;
 
-    /**
-     * Rough guess used to size the content buffer, so writing a large world does not spend most of its time
-     * growing that buffer by repeatedly reallocating and copying it.
-     * <p>
-     * Per section rather than per chunk, because that is what a chunk's size actually follows: a nether chunk
-     * of 16 sections is two thirds the size of an overworld chunk of 24. Measured across real worlds at
-     * around 1400 to 1700 bytes a section, and rounded up on purpose. Guessing high costs one larger
-     * allocation; guessing low costs a copy of everything written so far, once per doubling.
-     */
     private static final int ESTIMATED_BYTES_PER_SECTION = 1800;
     private static final int MAX_ESTIMATED_CONTENT_BYTES = 128 * 1024 * 1024;
 
-    /** Magic number, version, data version, compression type and uncompressed length. */
     private static final int HEADER_BYTES = 4 + 2 + 5 + 1 + 5;
 
     public static byte[] write(@NotNull PolarWorld world) {
@@ -48,28 +38,11 @@ public class PolarWriter {
         return write(world, dataConverter, PolarChunkArchive.Snapshot.EMPTY);
     }
 
-    /**
-     * Writes a world together with the chunks it was never asked to make live.
-     * <p>
-     * Archived chunks are copied straight across from the file they are already in, so a chunk nobody has
-     * touched never goes through the palettes and comes out bit for bit unchanged.
-     */
     public static byte[] writeWithArchive(@NotNull PolarWorld world, @NotNull PolarDataConverter dataConverter,
                                           @NotNull PolarChunkArchive archive) {
         return write(world, dataConverter, archive.snapshot());
     }
 
-    /**
-     * Writes a world together with an archive snapshot taken earlier.
-     * <p>
-     * Whoever is saving has to take that snapshot <em>before</em> it starts collecting the world's live
-     * chunks. A chunk made live in between is then in both halves, and the duplicate check below keeps the
-     * live one; taken the other way round it would be in neither, and would be missing from the file.
-     * <p>
-     * The archived bodies are read while this builds its buffer, so a source that has gone missing throws
-     * here, before anything is handed back to be written. A caller that only writes what this returns can
-     * never turn a failed read into a world with chunks missing.
-     */
     public static byte[] write(@NotNull PolarWorld world, @NotNull PolarDataConverter dataConverter,
                                @NotNull PolarChunkArchive.Snapshot archiveSnapshot) {
         List<PolarChunk> nonEmptyChunks = world.nonEmptyChunks();
@@ -110,13 +83,6 @@ public class PolarWriter {
         return ByteArrayUtil.outputArray(out);
     }
 
-    /**
-     * The archived chunks that are not also present in the world.
-     * <p>
-     * A chunk that has been made live belongs to the world from then on, and the archive drops it as it hands
-     * it over. Should the two ever disagree, the live one is the newer of the pair and writing both would
-     * leave the file with two entries for one position.
-     */
     private static Set<Long> archivedChunksToWrite(
             @NotNull List<PolarChunk> liveChunks, @NotNull PolarChunkArchive.Snapshot archiveSnapshot) {
         if (archiveSnapshot.isEmpty()) return Set.of();
@@ -127,7 +93,6 @@ public class PolarWriter {
         }
 
         Set<Long> toWrite = new HashSet<>(archiveSnapshot.positions());
-        // Made live after the snapshot was taken, so the live copy is the newer of the two
         toWrite.removeAll(liveIndexes);
         return toWrite;
     }

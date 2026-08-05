@@ -21,10 +21,6 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * The archive is the only thing standing between a world loaded in part and a world saved in part, so what is
- * checked here is one thing said several ways: a chunk that was never made live still comes out of the file.
- */
 final class PolarChunkArchiveTest {
 
     private static final byte MIN_SECTION = -4;
@@ -32,10 +28,8 @@ final class PolarChunkArchiveTest {
     private static final int SECTION_COUNT = MAX_SECTION - MIN_SECTION + 1;
     private static final int WORLD_SIZE = 12;
 
-    /** The chunks kept live, standing in for the ones a player has bought. */
     private static final int LIVE_CHUNKS = 3;
 
-    /** Polar stamps the game's data version into every file it writes, and asks the server what that is. */
     @BeforeAll
     static void detectGameVersion() {
         SharedConstants.tryDetectVersion();
@@ -73,8 +67,6 @@ final class PolarChunkArchiveTest {
             if (!fixture.live.contains(chunk.getKey())) bodyBytes += chunk.getValue().length;
         }
 
-        // Holding a chunk archived costs a position, not the chunk. An archive that ever creeps back towards
-        // the size of what it stands for is the whole point of this class undone.
         assertTrue(fixture.archive.retainedBytes() * 10L < bodyBytes,
                 "the archive retains " + fixture.archive.retainedBytes()
                         + " bytes for " + bodyBytes + " bytes of chunks");
@@ -101,7 +93,6 @@ final class PolarChunkArchiveTest {
         Fixture fixture = Fixture.build();
         long position = fixture.anyArchived();
 
-        // The snapshot is taken first, exactly as saving does, and only then is the chunk bought
         PolarChunkArchive.Snapshot snapshot = fixture.archive.snapshot();
         fixture.archive.take(CoordConversion.chunkX(position), CoordConversion.chunkZ(position));
         fixture.makeLive(position);
@@ -132,7 +123,6 @@ final class PolarChunkArchiveTest {
         Fixture fixture = Fixture.build();
         fixture.archive.markArchived(9_999, 9_999);
 
-        // Writing what it could find would quietly hand back a world short of a chunk
         assertThrows(IllegalStateException.class, fixture::save);
     }
 
@@ -157,7 +147,6 @@ final class PolarChunkArchiveTest {
         assertEquals(fixture.original.size(), bodies(fixture.save()).size());
     }
 
-    /** A world written to a source, then loaded again with all but a few of its chunks left archived. */
     private static final class Fixture {
 
         private final byte[] sourceBytes;
@@ -223,7 +212,6 @@ final class PolarChunkArchiveTest {
                     PolarWorld.CompressionType.ZSTD, MIN_SECTION, MAX_SECTION, new byte[0], chunks);
         }
 
-        /** A chunk whose contents differ per position, so a body written back in the wrong place shows up. */
         private static PolarChunk chunk(int chunkX, int chunkZ) {
             PolarSection[] sections = new PolarSection[SECTION_COUNT];
             Arrays.setAll(sections, index -> index == 4
@@ -246,7 +234,6 @@ final class PolarChunkArchiveTest {
         }
     }
 
-    /** Every chunk in a file, as the exact bytes it occupies, keyed by position. */
     private static Map<Long, byte[]> bodies(byte[] data) {
         PolarContentReader.Content content = PolarContentReader.open(data, PolarDataConverter.DEFAULT);
         ByteBuf buffer = content.body();

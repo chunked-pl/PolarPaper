@@ -14,37 +14,14 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import static live.minehub.polarpaper.core.util.ByteArrayUtil.getVarInt;
 
-/**
- * Remembers which chunks of a world were left out of it, so that saving writes them back.
- * <p>
- * A world does not have to make every chunk of its file live to keep it. What is left out stays where it
- * already is, in the file, and this holds nothing but the positions: a world of a thousand archived chunks
- * costs tens of kilobytes here rather than tens of megabytes. Bodies are read back from the source at the
- * moment they are needed, which is a chunk being made live, or the world being saved.
- * <p>
- * The file is the only copy of those chunks, so every path that could lose one fails loudly instead. A body
- * that cannot be read puts its position back and throws, and a save that cannot find every chunk it promised
- * to write throws before a single byte reaches disk, leaving the previous file untouched.
- * <p>
- * Safe to use from any thread.
- */
 public final class PolarChunkArchive {
 
-    /**
-     * What one archived position costs on the heap: a boxed long, the map node holding it and the reference
-     * in the table. Measured against ConcurrentHashMap's layout on a 64 bit JVM with compressed oops.
-     */
     private static final long BYTES_PER_POSITION = 48L;
+    private static final int POSITIONS_IN_MESSAGE = 4;
 
     private final Set<Long> positions = ConcurrentHashMap.newKeySet();
     private volatile @Nullable PolarSource source;
 
-    /**
-     * Points the archive at the file its chunks live in.
-     * <p>
-     * Has to be called again whenever the world is written somewhere else, once that write has succeeded: the
-     * bodies are then in the new file, and reading them from the old one would resurrect whatever it held.
-     */
     public void bindSource(@Nullable PolarSource source) {
         this.source = source;
     }
@@ -53,18 +30,10 @@ public final class PolarChunkArchive {
         return this.source;
     }
 
-    /**
-     * Records that a chunk stays in the file rather than becoming part of the world.
-     */
     public void markArchived(int chunkX, int chunkZ) {
         this.positions.add(CoordConversion.chunkIndex(chunkX, chunkZ));
     }
 
-    /**
-     * Puts a position back after making it live failed part way through.
-     *
-     * @see #take(int, int)
-     */
     public void restore(int chunkX, int chunkZ) {
         this.positions.add(CoordConversion.chunkIndex(chunkX, chunkZ));
     }
@@ -81,23 +50,10 @@ public final class PolarChunkArchive {
         return this.positions.isEmpty();
     }
 
-    /**
-     * What this archive is holding on the heap, for reporting. The chunk bodies are not on it.
-     */
     public long retainedBytes() {
         return (long) this.positions.size() * BYTES_PER_POSITION;
     }
 
-    /**
-     * Reads a chunk's body out of the file and stops holding its position.
-     * <p>
-     * Giving it up is the point: a chunk that has been made live belongs to the world from then on, and
-     * leaving the position here would have saving write it twice. A read that fails puts the position back
-     * before throwing, so the chunk is never dropped on the floor.
-     *
-     * @return the body, or null if this archive does not hold that chunk
-     * @throws IllegalStateException if the chunk is held but could not be read back
-     */
     public byte @Nullable [] take(int chunkX, int chunkZ) {
         long position = CoordConversion.chunkIndex(chunkX, chunkZ);
         if (!this.positions.remove(position)) return null;
@@ -116,25 +72,10 @@ public final class PolarChunkArchive {
         }
     }
 
-    /**
-     * The positions this archive holds right now.
-     * <p>
-     * Saving has to write a chunk count before the chunks themselves, so it needs a set that cannot change
-     * underneath it: a chunk made live half way through would leave the file claiming more chunks than it
-     * contains, which is a corrupt world.
-     */
     public @NotNull Snapshot snapshot() {
         return new Snapshot(this, Set.copyOf(this.positions));
     }
 
-    /**
-     * Hands every wanted chunk's body to {@code out}, in one pass over the file.
-     * <p>
-     * One pass because the alternative, reading the file once per chunk, is a thousand decompressions of the
-     * same megabytes per save.
-     *
-     * @throws IllegalStateException if the source is missing, unreadable, or does not hold every wanted chunk
-     */
     void readBodies(@NotNull @Unmodifiable Set<Long> wanted, @NotNull BodyReader out) {
         if (wanted.isEmpty()) return;
 
@@ -170,8 +111,6 @@ public final class PolarChunkArchive {
             out.read(chunkX, chunkZ, body, start, body.readerIndex() - start);
         }
 
-        // Never write a file that is missing chunks the world is still counting on. Throwing here leaves
-        // whatever is already on disk as the newest complete copy of the world.
         if (!pending.isEmpty()) {
             throw new IllegalStateException(pending.size() + " archived chunks are missing from the source file "
                     + "(" + describe(pending) + "); refusing to save a world without them");
@@ -182,7 +121,7 @@ public final class PolarChunkArchive {
         StringBuilder described = new StringBuilder();
         int shown = 0;
         for (long position : positions) {
-            if (shown == 4) {
+            if (shown == POSITIONS_IN_MESSAGE) {
                 described.append(", ...");
                 break;
             }
@@ -194,17 +133,11 @@ public final class PolarChunkArchive {
         return described.toString();
     }
 
-    /**
-     * Receives a chunk body as a window into the decompressed file, rather than as a copy of it.
-     */
     @FunctionalInterface
     interface BodyReader {
         void read(int chunkX, int chunkZ, @NotNull ByteBuf buffer, int offset, int length);
     }
 
-    /**
-     * The positions an archive held at one moment, and the archive to read them from.
-     */
     public record Snapshot(@NotNull PolarChunkArchive archive, @NotNull @Unmodifiable Set<Long> positions) {
 
         public static final Snapshot EMPTY = new Snapshot(new PolarChunkArchive(), Set.of());

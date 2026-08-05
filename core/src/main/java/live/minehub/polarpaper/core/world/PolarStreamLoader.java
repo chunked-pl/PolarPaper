@@ -133,12 +133,6 @@ public class PolarStreamLoader {
         return stream(data, world, dataConverter, worldAccess, blockSelector, ChunkResidencyPolicy.LOAD_EVERYTHING, null);
     }
 
-    /**
-     * Streams a world in, making live only the chunks {@code residency} asks for.
-     *
-     * @param archive collects the chunks left out, so that they survive being saved again; may be null only
-     *                when the residency loads everything
-     */
     public static CompletableFuture<Void> stream(byte @NotNull [] data, World world, @NotNull PolarDataConverter dataConverter,
                                                   @NotNull PolarWorldAccess worldAccess, @NotNull BlockSelector blockSelector,
                                                   @NotNull ChunkResidencyPolicy residency, @Nullable PolarChunkArchive archive) {
@@ -212,8 +206,6 @@ public class PolarStreamLoader {
             return null;
         }
 
-        // Part of the world, but not wanted live yet: it stays where it is, in the file, and the archive
-        // remembers only that this world is still counting on it
         if (archive != null && !residency.shouldLoad(chunkX, chunkZ)) {
             archive.markArchived(chunkX, chunkZ);
             PolarReader.skipChunkBody(version, bb, sectionCount);

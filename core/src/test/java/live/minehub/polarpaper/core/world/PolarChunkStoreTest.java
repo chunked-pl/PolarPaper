@@ -15,11 +15,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * A template read this way has to answer exactly what reading the whole world would have answered, while
- * costing something closer to the file than to the world.
- */
-final class PolarChunkBodiesTest {
+final class PolarChunkStoreTest {
 
     private static final byte MIN_SECTION = -4;
     private static final byte MAX_SECTION = 19;
@@ -33,27 +29,27 @@ final class PolarChunkBodiesTest {
 
     @Test
     void holdsEveryChunkTheFileHolds() {
-        PolarChunkBodies bodies = PolarChunkBodies.read(file());
+        PolarChunkStore store = PolarChunkStore.read(file());
 
-        assertEquals(WORLD_SIZE * WORLD_SIZE, bodies.size());
-        assertTrue(bodies.contains(0, 0));
-        assertTrue(bodies.contains(WORLD_SIZE - 1, WORLD_SIZE - 1));
-        assertFalse(bodies.contains(WORLD_SIZE, 0));
-        assertEquals(SECTION_COUNT, bodies.sectionCount());
+        assertEquals(WORLD_SIZE * WORLD_SIZE, store.size());
+        assertTrue(store.contains(0, 0));
+        assertTrue(store.contains(WORLD_SIZE - 1, WORLD_SIZE - 1));
+        assertFalse(store.contains(WORLD_SIZE, 0));
+        assertEquals(SECTION_COUNT, store.sectionCount());
     }
 
     @Test
     void expandsAChunkIntoWhatReadingTheWholeWorldWouldHaveGiven() {
         byte[] file = file();
         PolarWorld whole = PolarReader.read(file);
-        PolarChunkBodies bodies = PolarChunkBodies.read(file);
+        PolarChunkStore store = PolarChunkStore.read(file);
 
-        for (long position : bodies.positions()) {
+        for (long position : store.positions()) {
             int chunkX = CoordConversion.chunkX(position);
             int chunkZ = CoordConversion.chunkZ(position);
 
             PolarChunk expected = whole.chunkAt(chunkX, chunkZ);
-            PolarChunk actual = bodies.chunkAt(chunkX, chunkZ);
+            PolarChunk actual = store.chunkAt(chunkX, chunkZ);
 
             assertEquals(expected.x(), actual.x());
             assertEquals(expected.z(), actual.z());
@@ -76,17 +72,17 @@ final class PolarChunkBodiesTest {
 
     @Test
     void reportsNothingForAChunkTheFileDoesNotHold() {
-        assertNull(PolarChunkBodies.read(file()).chunkAt(9_999, 9_999));
+        assertNull(PolarChunkStore.read(file()).chunkAt(9_999, 9_999));
     }
 
     @Test
     void costsFarLessThanTheChunksItStandsFor() {
         byte[] file = file();
-        PolarChunkBodies bodies = PolarChunkBodies.read(file);
+        PolarChunkStore store = PolarChunkStore.read(file);
 
         long expanded = 0L;
-        for (long position : bodies.positions()) {
-            PolarChunk chunk = bodies.chunkAt(
+        for (long position : store.positions()) {
+            PolarChunk chunk = store.chunkAt(
                     CoordConversion.chunkX(position), CoordConversion.chunkZ(position));
             for (PolarSection section : chunk.sections()) {
                 if (section.blockPalette().length > 1 && section.blockData() != null) {
@@ -95,8 +91,8 @@ final class PolarChunkBodiesTest {
             }
         }
 
-        assertTrue(bodies.compressedBytes() * 4L < expanded,
-                "holding " + bodies.compressedBytes() + " bytes for " + expanded + " bytes of block data");
+        assertTrue(store.compressedBytes() * 4L < expanded,
+                "holding " + store.compressedBytes() + " bytes for " + expanded + " bytes of block data");
     }
 
     private static byte[] file() {
@@ -113,7 +109,6 @@ final class PolarChunkBodiesTest {
         return PolarWriter.write(world, PolarDataConverter.DEFAULT);
     }
 
-    /** Contents differ per position, so a body expanded from the wrong place would show up. */
     private static PolarChunk chunk(int chunkX, int chunkZ) {
         PolarSection[] sections = new PolarSection[SECTION_COUNT];
         Arrays.setAll(sections, index -> index == 6

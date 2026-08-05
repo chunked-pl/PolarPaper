@@ -7,22 +7,11 @@ import org.jetbrains.annotations.NotNull;
 
 import static live.minehub.polarpaper.core.util.ByteArrayUtil.getVarInt;
 
-/**
- * Reads the part every polar file opens with, up to the point its chunks begin.
- * <p>
- * Streaming a world in and reading bodies back out of an archive both have to walk this header, and a second
- * copy of the walk is how a format change turns into a file that still reads as valid but is not. There is
- * one walk, here.
- */
 final class PolarContentReader {
 
     private PolarContentReader() {
     }
 
-    /**
-     * A file opened up to its first chunk. {@code body} is positioned at that chunk, and is the decompressed
-     * content rather than the bytes on disk.
-     */
     record Content(short version, int dataVersion, byte minSection, byte maxSection,
                    byte @NotNull [] userData, int chunkCount, @NotNull ByteBuf body) {
 
