@@ -28,9 +28,14 @@ public class PolarWriter {
     /**
      * Rough guess used to size the content buffer, so writing a large world does not spend most of its time
      * growing that buffer by repeatedly reallocating and copying it.
+     * <p>
+     * Per section rather than per chunk, because that is what a chunk's size actually follows: a nether chunk
+     * of 16 sections is two thirds the size of an overworld chunk of 24. Measured across real worlds at
+     * around 1400 to 1700 bytes a section, and rounded up on purpose. Guessing high costs one larger
+     * allocation; guessing low costs a copy of everything written so far, once per doubling.
      */
-    private static final int ESTIMATED_BYTES_PER_CHUNK = 4096;
-    private static final int MAX_ESTIMATED_CONTENT_BYTES = 64 * 1024 * 1024;
+    private static final int ESTIMATED_BYTES_PER_SECTION = 1800;
+    private static final int MAX_ESTIMATED_CONTENT_BYTES = 128 * 1024 * 1024;
 
     /** Magic number, version, data version, compression type and uncompressed length. */
     private static final int HEADER_BYTES = 4 + 2 + 5 + 1 + 5;
@@ -71,7 +76,8 @@ public class PolarWriter {
         Set<Long> archivedChunks = archivedChunksToWrite(nonEmptyChunks, archiveSnapshot);
         int chunkCount = nonEmptyChunks.size() + archivedChunks.size();
 
-        ByteBuf content = Unpooled.buffer(estimateContentBytes(chunkCount));
+        ByteBuf content = Unpooled.buffer(
+                estimateContentBytes(chunkCount, world.maxSection() - world.minSection() + 1));
         content.writeByte(world.minSection());
         content.writeByte(world.maxSection());
         writeVarInt(world.userData().length, content);
@@ -126,8 +132,9 @@ public class PolarWriter {
         return toWrite;
     }
 
-    private static int estimateContentBytes(int chunkCount) {
-        return (int) Math.min((long) chunkCount * ESTIMATED_BYTES_PER_CHUNK, MAX_ESTIMATED_CONTENT_BYTES);
+    private static int estimateContentBytes(int chunkCount, int sectionCount) {
+        long estimated = (long) chunkCount * sectionCount * ESTIMATED_BYTES_PER_SECTION;
+        return (int) Math.min(estimated, MAX_ESTIMATED_CONTENT_BYTES);
     }
 
     private static void writeChunk(@NotNull ByteBuf bb, @NotNull PolarChunk chunk, int sectionCount) {
