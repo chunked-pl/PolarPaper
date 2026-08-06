@@ -355,6 +355,19 @@ public class Polar {
     }
 
     /**
+     * Whether the position still has a real chunk waiting in the archive for {@link #loadChunk} to expand.
+     * <p>
+     * A caller that charges a player for a chunk needs to know this before it takes anything: a position
+     * that was never written to the polar file expands into air, and the player would pay for nothing.
+     *
+     * @return whether the archive holds a chunk for this position
+     */
+    public static boolean isChunkArchived(@NotNull World world, int chunkX, int chunkZ) {
+        PolarStreamingGenerator generator = streamingGeneratorOf(world);
+        return generator != null && generator.getChunkArchive().contains(chunkX, chunkZ);
+    }
+
+    /**
      * Puts an empty chunk at a position whose real contents are not meant to be seen yet.
      * <p>
      * The world needs a chunk to be there for light to behave along its edge, but nothing says it has to be
