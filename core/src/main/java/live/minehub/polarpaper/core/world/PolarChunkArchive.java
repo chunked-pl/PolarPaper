@@ -4,6 +4,8 @@ import io.netty.buffer.ByteBuf;
 import live.minehub.polarpaper.core.source.PolarSource;
 import live.minehub.polarpaper.core.util.CoordConversion;
 import org.jetbrains.annotations.NotNull;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.jetbrains.annotations.Nullable;
 import org.jetbrains.annotations.Range;
 import org.jetbrains.annotations.Unmodifiable;
@@ -15,6 +17,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import static live.minehub.polarpaper.core.util.ByteArrayUtil.getVarInt;
 
 public final class PolarChunkArchive {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(PolarChunkArchive.class);
 
     private static final long BYTES_PER_POSITION = 48L;
     private static final int POSITIONS_IN_MESSAGE = 4;
@@ -107,6 +111,61 @@ public final class PolarChunkArchive {
 
     public @NotNull Snapshot snapshot() {
         return new Snapshot(this, Set.copyOf(this.positions));
+    }
+
+    /**
+     * Widens a snapshot with the positions the file holds that nothing else is about to write.
+     * <p>
+     * Every chunk in the file is meant to be either live in the world or archived. A chunk that left the
+     * archive to become live and then stopped being live sits in neither, and saving would drop it: the
+     * position would be gone from the file and come back as air. Rather than trust that a live chunk stays
+     * live, this takes such positions back into the archive for the save, so the file keeps what it had.
+     *
+     * @param snapshot the archive positions already going into the save
+     * @param covered the positions the save writes on its own, live chunks included
+     * @return the snapshot, widened by whatever the file holds beyond those two sets
+     */
+    public @NotNull Snapshot snapshotIncluding(@NotNull Snapshot snapshot, @NotNull Set<Long> covered) {
+        Set<Long> orphans;
+        try {
+            orphans = new HashSet<>(this.positionsInSource());
+        } catch (RuntimeException | Error failure) {
+            LOGGER.error("Could not list the chunks of the source file; saving without recovering any", failure);
+            return snapshot;
+        }
+
+        orphans.removeAll(covered);
+        orphans.removeAll(snapshot.positions());
+        if (orphans.isEmpty()) return snapshot;
+
+        LOGGER.warn("Recovering {} chunk(s) that the world no longer holds: {}", orphans.size(), describe(orphans));
+        Set<Long> widened = new HashSet<>(snapshot.positions());
+        widened.addAll(orphans);
+        return new Snapshot(this, Set.copyOf(widened));
+    }
+
+    private @NotNull Set<Long> positionsInSource() {
+        PolarSource polarSource = this.source;
+        if (polarSource == null) return Set.of();
+
+        byte[] data;
+        try {
+            data = polarSource.readBytes();
+        } catch (Exception exception) {
+            throw new IllegalStateException("Could not read the source file to list its chunks", exception);
+        }
+        if (data == null || data.length == 0) return Set.of();
+
+        PolarContentReader.Content content = PolarContentReader.open(data, PolarDataConverter.DEFAULT);
+        ByteBuf body = content.body();
+        Set<Long> positions = new HashSet<>(content.chunkCount());
+        for (int i = 0; i < content.chunkCount(); i++) {
+            int chunkX = getVarInt(body);
+            int chunkZ = getVarInt(body);
+            PolarReader.skipChunkBody(content.version(), body, content.sectionCount());
+            positions.add(CoordConversion.chunkIndex(chunkX, chunkZ));
+        }
+        return positions;
     }
 
     void readBodies(@NotNull @Unmodifiable Set<Long> wanted, @NotNull BodyReader out) {

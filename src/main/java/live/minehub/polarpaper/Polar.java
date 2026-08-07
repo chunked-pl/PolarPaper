@@ -400,6 +400,15 @@ public class Polar {
                 }));
     }
 
+    /** The positions a converted world writes on its own, so the archive knows what it need not keep. */
+    private static @NotNull java.util.Set<Long> positionsOf(@NotNull PolarWorld polarWorld) {
+        java.util.Set<Long> positions = new java.util.HashSet<>();
+        for (PolarChunk chunk : polarWorld.chunks()) {
+            positions.add(live.minehub.polarpaper.core.util.CoordConversion.chunkIndex(chunk.x(), chunk.z()));
+        }
+        return positions;
+    }
+
     private static @Nullable PolarStreamingGenerator streamingGeneratorOf(@NotNull World world) {
         PolarGenerator generator = PolarGenerator.fromWorld(world);
         return generator instanceof PolarStreamingGenerator streaming ? streaming : null;
@@ -768,8 +777,10 @@ public class Polar {
                 world, generator.getWorldAccess(), blockSelector, config, extraChunks);
         polarWorld.userData(generator.getUserData());
         dropPlaceholderChunks(polarWorld, generator);
+        PolarChunkArchive.Snapshot keptSnapshot =
+                generator.getChunkArchive().snapshotIncluding(archiveSnapshot, positionsOf(polarWorld));
         PolarSource source = generator.getSource();
-        source.saveBytes(PolarWriter.write(polarWorld, PolarDataConverter.DEFAULT, archiveSnapshot));
+        source.saveBytes(PolarWriter.write(polarWorld, PolarDataConverter.DEFAULT, keptSnapshot));
         generator.getChunkArchive().bindSource(source);
     }
 
@@ -815,7 +826,10 @@ public class Polar {
         return future.thenAcceptAsync(newPolarWorld -> {
             newPolarWorld.userData(worldUserData);
             if (generator != null) dropPlaceholderChunks(newPolarWorld, generator);
-            byte[] worldBytes = PolarWriter.write(newPolarWorld, PolarDataConverter.DEFAULT, archiveSnapshot);
+            PolarChunkArchive.Snapshot keptSnapshot = generator == null
+                    ? archiveSnapshot
+                    : generator.getChunkArchive().snapshotIncluding(archiveSnapshot, positionsOf(newPolarWorld));
+            byte[] worldBytes = PolarWriter.write(newPolarWorld, PolarDataConverter.DEFAULT, keptSnapshot);
             try {
                 polarSource.saveBytes(worldBytes);
             } catch (Exception e) {

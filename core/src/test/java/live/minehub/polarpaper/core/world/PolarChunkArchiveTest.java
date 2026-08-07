@@ -12,6 +12,7 @@ import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static live.minehub.polarpaper.core.util.ByteArrayUtil.getVarInt;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -120,6 +121,21 @@ final class PolarChunkArchiveTest {
     }
 
     @Test
+    void keepsAChunkThatStoppedBeingLiveWithoutGoingBackToTheArchive() {
+        Fixture fixture = Fixture.build();
+        long position = fixture.anyArchived();
+        fixture.goLive(position);
+        fixture.live.remove(position);
+
+        Map<Long, byte[]> written = bodies(fixture.saveKeepingOrphans());
+
+        assertEquals(fixture.original.size(), written.size(),
+                "a chunk that left the archive and stopped being live was dropped from the file");
+        assertArrayEquals(fixture.original.get(position), written.get(position),
+                "the recovered chunk came back as something other than what it was");
+    }
+
+    @Test
     void abandonLeavesTheChunkArchivedAfterMakingItLiveFailed() {
         Fixture fixture = Fixture.build();
         long position = fixture.anyArchived();
@@ -215,6 +231,10 @@ final class PolarChunkArchiveTest {
 
         byte[] save() {
             return this.save(this.archive.snapshot());
+        }
+
+        byte[] saveKeepingOrphans() {
+            return this.save(this.archive.snapshotIncluding(this.archive.snapshot(), Set.copyOf(this.live)));
         }
 
         byte[] save(PolarChunkArchive.Snapshot snapshot) {
