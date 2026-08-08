@@ -121,7 +121,7 @@ final class PolarChunkArchiveTest {
     }
 
     @Test
-    void keepsAChunkThatStoppedBeingLiveWithoutGoingBackToTheArchive() {
+    void returnsAChunkThatStoppedBeingLiveToTheArchive() {
         Fixture fixture = Fixture.build();
         long position = fixture.anyArchived();
         fixture.goLive(position);
@@ -133,6 +133,37 @@ final class PolarChunkArchiveTest {
                 "a chunk that left the archive and stopped being live was dropped from the file");
         assertArrayEquals(fixture.original.get(position), written.get(position),
                 "the recovered chunk came back as something other than what it was");
+        assertTrue(fixture.archive.contains(CoordConversion.chunkX(position), CoordConversion.chunkZ(position)),
+                "the recovered chunk was kept only for one save and not returned to the live archive");
+        assertArrayEquals(fixture.original.get(position),
+                fixture.archive.claim(CoordConversion.chunkX(position), CoordConversion.chunkZ(position)),
+                "the recovered chunk could not be expanded again without reloading the world");
+    }
+
+    @Test
+    void keepsARecoveredChunkAcrossLaterSaves() {
+        Fixture fixture = Fixture.build();
+        long position = fixture.anyArchived();
+        fixture.goLive(position);
+        fixture.live.remove(position);
+
+        fixture.saveKeepingOrphans();
+        Map<Long, byte[]> writtenAgain = bodies(fixture.save());
+
+        assertArrayEquals(fixture.original.get(position), writtenAgain.get(position),
+                "a recovered chunk survived only the save that first noticed it");
+    }
+
+    @Test
+    void doesNotRecoverAChunkThatTheLiveWorldStillCovers() {
+        Fixture fixture = Fixture.build();
+        long position = fixture.anyArchived();
+        fixture.goLive(position);
+
+        fixture.saveKeepingOrphans();
+
+        assertFalse(fixture.archive.contains(CoordConversion.chunkX(position), CoordConversion.chunkZ(position)),
+                "a live chunk was duplicated back into the archive");
     }
 
     @Test

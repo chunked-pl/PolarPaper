@@ -333,6 +333,7 @@ public class Polar {
                         // Already standing there as an empty placeholder, so only its blocks change
                         PolarStreamLoader.replaceChunkBlocks(level, world, existing, prepared.levelChunk(),
                                 prepared.chunk(), generator.getWorldAccess(), blockSelector);
+                        retainChunk(world, chunkX, chunkZ);
                         generator.clearPlaceholderChunk(chunkX, chunkZ);
                         generator.getChunkArchive().release(chunkX, chunkZ);
                         return true;
@@ -345,6 +346,7 @@ public class Polar {
                     prepared.levelChunk().tryMarkSaved();
                     PolarStreamLoader.insertChunk(level, prepared.levelChunk());
                     generator.getWorldAccess().loadChunkData(world, prepared.levelChunk(), prepared.chunk().userData(), blockSelector);
+                    retainChunk(world, chunkX, chunkZ);
                     generator.clearPlaceholderChunk(chunkX, chunkZ);
                     generator.getChunkArchive().release(chunkX, chunkZ);
                     return true;
@@ -393,6 +395,7 @@ public class Polar {
                     if (liveChunkAt(level, chunkX, chunkZ) != null) return false;
                     levelChunk.tryMarkSaved();
                     PolarStreamLoader.insertChunk(level, levelChunk);
+                    retainChunk(world, chunkX, chunkZ);
                     // Saving must write the archived chunk for this position, not the empty one now standing
                     // there to be looked at
                     generator.markPlaceholderChunk(chunkX, chunkZ);
@@ -417,6 +420,10 @@ public class Polar {
     private static @Nullable LevelChunk liveChunkAt(@NotNull ServerLevel level, int chunkX, int chunkZ) {
         NewChunkHolder holder = level.moonrise$getChunkTaskScheduler().chunkHolderManager.getChunkHolder(chunkX, chunkZ);
         return holder != null && holder.getCurrentChunk() instanceof LevelChunk chunk ? chunk : null;
+    }
+
+    private static void retainChunk(@NotNull World world, int chunkX, int chunkZ) {
+        world.addPluginChunkTicket(chunkX, chunkZ, PolarPaper.getPlugin());
     }
 
     /** A chunk built off the main thread, waiting to be put into the world on it. */

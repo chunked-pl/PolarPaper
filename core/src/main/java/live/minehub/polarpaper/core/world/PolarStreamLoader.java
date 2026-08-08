@@ -264,6 +264,7 @@ public class PolarStreamLoader {
                 TaskFutures.runSync(plugin, () -> {
                     newLevelChunk.tryMarkSaved();
                     insertChunk(serverLevel, newLevelChunk);
+                    world.addPluginChunkTicket(chunkX, chunkZ, plugin);
                     worldAccess.loadChunkData(world, newLevelChunk, userData, blockSelector);
                     chunkLight.applyTo(serverLevel, newLevelChunk);
                     return null;

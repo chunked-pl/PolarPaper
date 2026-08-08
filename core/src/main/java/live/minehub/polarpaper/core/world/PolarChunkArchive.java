@@ -139,6 +139,7 @@ public final class PolarChunkArchive {
         if (orphans.isEmpty()) return snapshot;
 
         LOGGER.warn("Recovering {} chunk(s) that the world no longer holds: {}", orphans.size(), describe(orphans));
+        this.positions.addAll(orphans);
         Set<Long> widened = new HashSet<>(snapshot.positions());
         widened.addAll(orphans);
         return new Snapshot(this, Set.copyOf(widened));
