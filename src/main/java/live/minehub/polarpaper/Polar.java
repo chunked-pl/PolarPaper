@@ -423,7 +423,7 @@ public class Polar {
     }
 
     private static void retainChunk(@NotNull World world, int chunkX, int chunkZ) {
-        world.addPluginChunkTicket(chunkX, chunkZ, PolarPaper.getPlugin());
+        PolarStreamLoader.retainChunk(PolarPaper.getPlugin(), world, chunkX, chunkZ);
     }
 
     /** A chunk built off the main thread, waiting to be put into the world on it. */

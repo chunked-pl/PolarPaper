@@ -264,11 +264,23 @@ public class PolarStreamLoader {
                 TaskFutures.runSync(plugin, () -> {
                     newLevelChunk.tryMarkSaved();
                     insertChunk(serverLevel, newLevelChunk);
-                    world.addPluginChunkTicket(chunkX, chunkZ, plugin);
+                    retainChunk(plugin, world, chunkX, chunkZ);
                     worldAccess.loadChunkData(world, newLevelChunk, userData, blockSelector);
                     chunkLight.applyTo(serverLevel, newLevelChunk);
                     return null;
                 }));
+    }
+
+    /**
+     * Keeps a chunk that was just put into the world from being unloaded again.
+     * <p>
+     * The ticket is taken on the next tick rather than now, because asking for one goes through
+     * {@link org.bukkit.World#getChunkAt}, which drives the chunk system's own loading pipeline. Run against a
+     * chunk holder that was populated by hand a moment ago, that pipeline finds a half built chunk where it
+     * expects a finished one and fails. By the next tick the holder is settled and the ticket is just a ticket.
+     */
+    public static void retainChunk(@NotNull Plugin plugin, @NotNull World world, int chunkX, int chunkZ) {
+        Bukkit.getScheduler().runTask(plugin, () -> world.addPluginChunkTicket(chunkX, chunkZ, plugin));
     }
 
     /**
