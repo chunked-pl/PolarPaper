@@ -25,7 +25,7 @@ public class WorldKey {
     }
 
     /**
-     * Gets a bukkit world by first trying Polar's namespace, then Minecraft's namespace
+     * Gets a bukkit world by first trying Polar's namespace, then Minecraft's, then the plain name
      * @param worldName The name of the world
      * @return null if no world found
      */
@@ -37,32 +37,32 @@ public class WorldKey {
 
         // try polar namespace
         NamespacedKey worldKey = NamespacedKey.fromString(worldName, PolarPaper.getPlugin());
-        if (worldKey == null) return null;
-        World world = Bukkit.getWorld(worldKey);
+        World world = worldKey == null ? null : Bukkit.getWorld(worldKey);
         if (world != null) return world;
 
         // try minecraft namespace
         worldKey = NamespacedKey.fromString(worldName);
-        if (worldKey == null) return null;
-        world = Bukkit.getWorld(worldKey);
-        return world;
+        world = worldKey == null ? null : Bukkit.getWorld(worldKey);
+        if (world != null) return world;
+
+        return Bukkit.getWorld(worldName);
     }
 
     public static @Nullable World getWorld(Identifier id) {
-        NamespacedKey worldKey;
-        World world;
-
         if (id.getNamespace().equals(Identifier.DEFAULT_NAMESPACE)) {
             // try polar namespace
-            worldKey = NamespacedKey.fromString(id.getPath(), PolarPaper.getPlugin());
-            if (worldKey == null) return null;
-            world = Bukkit.getWorld(worldKey);
-            if (world != null) return world;
+            NamespacedKey polarKey = NamespacedKey.fromString(id.getPath(), PolarPaper.getPlugin());
+            World polarWorld = polarKey == null ? null : Bukkit.getWorld(polarKey);
+            if (polarWorld != null) return polarWorld;
         }
 
-        worldKey = new NamespacedKey(id.getNamespace(), id.getPath());
-        world = Bukkit.getWorld(worldKey);
-        return world;
+        World world = Bukkit.getWorld(new NamespacedKey(id.getNamespace(), id.getPath()));
+        if (world != null) return world;
+
+        // A world is not named after its key. The server's own worlds sit in folders called "world"
+        // and "world_nether" while their keys are minecraft:overworld and minecraft:the_nether, so
+        // looking only by key answers "does not exist" for every world the server started with.
+        return id.getNamespace().equals(Identifier.DEFAULT_NAMESPACE) ? Bukkit.getWorld(id.getPath()) : null;
     }
 
     public static boolean isWithinWorldsFolder(Path path) {

@@ -19,11 +19,13 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 public abstract class PolarCmd {
 
     private static final long WORLD_NAME_CACHE_NANOS = TimeUnit.SECONDS.toNanos(5);
+    private static final Pattern IDENTIFIER_PATH = Pattern.compile("[a-z0-9_.\\-/]+");
 
     private static volatile List<String> cachedWorldNames;
     private static volatile long cachedWorldNamesAt;
@@ -133,6 +135,7 @@ public abstract class PolarCmd {
     public RequiredArgumentBuilder<CommandSourceStack, Identifier> createWorldNameArgument(boolean onlyPolar) {
         return Commands.argument("world name", IdentifierArgument.id())
                 .suggests((_, s) -> {
+                    String typed = s.getRemainingLowerCase();
                     for (World world : Bukkit.getWorlds()) {
                         if (onlyPolar) {
                             PolarGenerator polarGenerator = PolarGenerator.fromWorld(world);
@@ -141,10 +144,18 @@ public abstract class PolarCmd {
 
                         String worldKey = world.getKey().toString().replace(PolarPaper.getPlugin().namespace() + ":", "");
 
-                        if (!worldKey.toLowerCase().startsWith(s.getRemainingLowerCase())
-                            && !world.getKey().getKey().toLowerCase().startsWith(s.getRemainingLowerCase())) continue;
+                        if (worldKey.toLowerCase().startsWith(typed)
+                            || world.getKey().getKey().toLowerCase().startsWith(typed)) {
+                            s.suggest(worldKey);
+                        }
 
-                        s.suggest(worldKey);
+                        // The server's own worlds go by their folder name rather than their key, so
+                        // "world" has to be offered alongside minecraft:overworld
+                        String worldName = world.getName().toLowerCase();
+                        if (!worldName.equals(worldKey) && worldName.startsWith(typed)
+                            && IDENTIFIER_PATH.matcher(worldName).matches()) {
+                            s.suggest(worldName);
+                        }
                     }
                     return s.buildFuture();
                 });
