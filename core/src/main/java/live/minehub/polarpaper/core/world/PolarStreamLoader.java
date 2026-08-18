@@ -264,6 +264,8 @@ public class PolarStreamLoader {
                 TaskFutures.runSync(plugin, () -> {
                     newLevelChunk.tryMarkSaved();
                     if (!insertChunk(serverLevel, newLevelChunk)) {
+                        LOGGER.warn("Dropped the stored chunk at {} {} in {}, the chunk system already holds that position",
+                                chunkX, chunkZ, world.getKey());
                         return null;
                     }
                     retainChunk(plugin, world, chunkX, chunkZ);
@@ -380,6 +382,10 @@ public class PolarStreamLoader {
      * back into the holder, which would leave the holder carrying a half built chunk while the ticket level
      * already says a finished one stands there. Everything that later asks the position to tick reads that
      * as a finished chunk and fails on the cast.
+     * <p>
+     * Whether a refusal matters is the caller's to judge, so it is reported rather than logged: losing a
+     * chunk of real terrain is a problem, while a position that was only going to hold a stand in is not,
+     * because the chunk the system puts there is the same air the stand in was made of.
      *
      * @return whether the chunk was put into the world
      */
@@ -408,11 +414,7 @@ public class PolarStreamLoader {
             chunkHolderManager.ticketLockArea.unlock(lock);
         }
 
-        if (systemOwnsPosition) {
-            LOGGER.warn("Not inserting chunk at {} {} in {}, the chunk system is already loading it",
-                    chunkX, chunkZ, serverLevel.getWorld().getKey());
-            return false;
-        }
+        if (systemOwnsPosition) return false;
 
         newLevelChunk.needsDecoration = false;
         newLevelChunk.mustNotSave = true;

@@ -241,6 +241,9 @@ public class Polar {
                                 levelChunk.tryMarkSaved();
                                 if (PolarStreamLoader.insertChunk(level, levelChunk)) {
                                     worldAccess.loadChunkData(world, levelChunk, chunk.userData(), blockSelector);
+                                } else {
+                                    LOGGER.warn("Dropped the stored chunk at {} {} in {}, the chunk system already holds that position",
+                                            chunk.x(), chunk.z(), worldName);
                                 }
                                 return (Void) null;
                             }))
@@ -342,6 +345,8 @@ public class Polar {
                     }
                     prepared.levelChunk().tryMarkSaved();
                     if (!PolarStreamLoader.insertChunk(level, prepared.levelChunk())) {
+                        LOGGER.warn("Could not expand the archived chunk at {} {} in {}, the chunk system already holds that position",
+                                chunkX, chunkZ, world.getKey());
                         // Left in the archive so that a later call can expand it once the position is free
                         generator.getChunkArchive().abandon(chunkX, chunkZ);
                         return false;
@@ -394,10 +399,12 @@ public class Polar {
         return PolarStreamLoader.prepareChunkAsync(levelChunk)
                 .thenCompose(_ -> TaskFutures.runSync(PolarPaper.getPlugin(), () -> {
                     if (liveChunkAt(level, chunkX, chunkZ) != null) return false;
+
                     levelChunk.tryMarkSaved();
-                    if (!PolarStreamLoader.insertChunk(level, levelChunk)) {
-                        return false;
-                    }
+                    // A position the chunk system claimed while this was being prepared ends up holding a
+                    // generated chunk, which in a polar world is air: the same thing this puts there. The
+                    // stand in stands either way, so the position is marked either way.
+                    PolarStreamLoader.insertChunk(level, levelChunk);
                     retainChunk(world, chunkX, chunkZ);
                     // Saving must write the archived chunk for this position, not the empty one now standing
                     // there to be looked at
