@@ -10,7 +10,9 @@ import org.jetbrains.annotations.Nullable;
 import org.jetbrains.annotations.Range;
 import org.jetbrains.annotations.Unmodifiable;
 
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -110,7 +112,7 @@ public final class PolarChunkArchive {
     }
 
     public @NotNull Snapshot snapshot() {
-        return new Snapshot(this, Set.copyOf(this.positions));
+        return new Snapshot(this, Set.copyOf(this.positions), null);
     }
 
     /**
@@ -126,88 +128,78 @@ public final class PolarChunkArchive {
      * @return the snapshot, widened by whatever the file holds beyond those two sets
      */
     public @NotNull Snapshot snapshotIncluding(@NotNull Snapshot snapshot, @NotNull Set<Long> covered) {
-        Set<Long> orphans;
+        SourceIndex index;
         try {
-            orphans = new HashSet<>(this.positionsInSource());
+            index = this.readSourceIndex();
         } catch (RuntimeException | Error failure) {
-            LOGGER.error("Could not list the chunks of the source file; saving without recovering any", failure);
+            LOGGER.error("Could not read the chunks of the source file; saving without recovering any", failure);
             return snapshot;
         }
+        if (index == null) return snapshot;
 
+        Set<Long> orphans = new HashSet<>(index.slices().keySet());
         orphans.removeAll(covered);
         orphans.removeAll(snapshot.positions());
-        if (orphans.isEmpty()) return snapshot;
+        if (orphans.isEmpty()) return new Snapshot(this, snapshot.positions(), index);
 
         LOGGER.warn("Recovering {} chunk(s) that the world no longer holds: {}", orphans.size(), describe(orphans));
         this.positions.addAll(orphans);
         Set<Long> widened = new HashSet<>(snapshot.positions());
         widened.addAll(orphans);
-        return new Snapshot(this, Set.copyOf(widened));
+        return new Snapshot(this, Set.copyOf(widened), index);
     }
 
-    private @NotNull Set<Long> positionsInSource() {
-        PolarSource polarSource = this.source;
-        if (polarSource == null) return Set.of();
+    /**
+     * Where every chunk of the source file sits inside its decompressed content.
+     * <p>
+     * Saving needs both the list of positions the file holds and the bodies of the ones it is going to carry
+     * over. Reading the file once and indexing it serves both, where asking for them separately meant reading
+     * and decompressing the whole of it twice for every save of every world.
+     */
+    private @Nullable SourceIndex readSourceIndex() {
+        PolarContentReader.Content content = this.openSource();
+        if (content == null) return null;
 
-        byte[] data;
-        try {
-            data = polarSource.readBytes();
-        } catch (Exception exception) {
-            throw new IllegalStateException("Could not read the source file to list its chunks", exception);
-        }
-        if (data == null || data.length == 0) return Set.of();
-
-        PolarContentReader.Content content = PolarContentReader.open(data, PolarDataConverter.DEFAULT);
         ByteBuf body = content.body();
-        Set<Long> positions = new HashSet<>(content.chunkCount());
+        Map<Long, int[]> slices = HashMap.newHashMap(content.chunkCount());
         for (int i = 0; i < content.chunkCount(); i++) {
-            int chunkX = getVarInt(body);
-            int chunkZ = getVarInt(body);
-            PolarReader.skipChunkBody(content.version(), body, content.sectionCount());
-            positions.add(CoordConversion.chunkIndex(chunkX, chunkZ));
-        }
-        return positions;
-    }
-
-    void readBodies(@NotNull @Unmodifiable Set<Long> wanted, @NotNull BodyReader out) {
-        if (wanted.isEmpty()) return;
-
-        PolarSource polarSource = this.source;
-        if (polarSource == null) {
-            throw new IllegalStateException(
-                    "Archive holds " + wanted.size() + " chunks but has no source to read them from");
-        }
-
-        byte[] data;
-        try {
-            data = polarSource.readBytes();
-        } catch (Exception exception) {
-            throw new IllegalStateException("Could not read the archive source of " + wanted.size() + " chunks",
-                    exception);
-        }
-        if (data == null || data.length == 0) {
-            throw new IllegalStateException("Archive source is empty, but it holds " + wanted.size() + " chunks");
-        }
-
-        PolarContentReader.Content content = PolarContentReader.open(data, PolarDataConverter.DEFAULT);
-        ByteBuf body = content.body();
-        Set<Long> pending = new HashSet<>(wanted);
-
-        for (int i = 0; i < content.chunkCount() && !pending.isEmpty(); i++) {
             int chunkX = getVarInt(body);
             int chunkZ = getVarInt(body);
 
             int start = body.readerIndex();
             PolarReader.skipChunkBody(content.version(), body, content.sectionCount());
-            if (!pending.remove(CoordConversion.chunkIndex(chunkX, chunkZ))) continue;
-
-            out.read(chunkX, chunkZ, body, start, body.readerIndex() - start);
+            slices.put(CoordConversion.chunkIndex(chunkX, chunkZ), new int[] {start, body.readerIndex() - start});
         }
+        return new SourceIndex(body, slices);
+    }
 
-        if (!pending.isEmpty()) {
-            throw new IllegalStateException(pending.size() + " archived chunks are missing from the source file "
-                    + "(" + describe(pending) + "); refusing to save a world without them");
+    /**
+     * Reads and decompresses the world's file, or reports null when it has no source to read.
+     */
+    private @Nullable PolarContentReader.Content openSource() {
+        PolarSource polarSource = this.source;
+        if (polarSource == null) return null;
+
+        byte[] data;
+        try {
+            data = polarSource.readBytes();
+        } catch (Exception exception) {
+            throw new IllegalStateException("Could not read the archive source", exception);
         }
+        if (data == null || data.length == 0) return null;
+
+        return PolarContentReader.open(data, PolarDataConverter.DEFAULT);
+    }
+
+    void readBodies(@NotNull @Unmodifiable Set<Long> wanted, @NotNull BodyReader out) {
+        if (wanted.isEmpty()) return;
+
+        SourceIndex index = this.readSourceIndex();
+        if (index == null) {
+            throw new IllegalStateException(
+                    "Archive holds " + wanted.size() + " chunks but has no source to read them from");
+        }
+        index.readBodies(wanted, out);
     }
 
     private static @NotNull String describe(@NotNull Set<Long> positions) {
@@ -231,16 +223,48 @@ public final class PolarChunkArchive {
         void read(int chunkX, int chunkZ, @NotNull ByteBuf buffer, int offset, int length);
     }
 
-    public record Snapshot(@NotNull PolarChunkArchive archive, @NotNull @Unmodifiable Set<Long> positions) {
+    /**
+     * A decompressed source file together with where each of its chunks starts, so that handing out bodies
+     * costs a lookup rather than another walk over every chunk in the file.
+     */
+    record SourceIndex(@NotNull ByteBuf content, @NotNull Map<Long, int[]> slices) {
 
-        public static final Snapshot EMPTY = new Snapshot(new PolarChunkArchive(), Set.of());
+        void readBodies(@NotNull @Unmodifiable Set<Long> wanted, @NotNull BodyReader out) {
+            Set<Long> missing = null;
+            for (long position : wanted) {
+                int[] slice = this.slices.get(position);
+                if (slice == null) {
+                    if (missing == null) missing = new HashSet<>();
+                    missing.add(position);
+                    continue;
+                }
+                out.read(CoordConversion.chunkX(position), CoordConversion.chunkZ(position),
+                        this.content, slice[0], slice[1]);
+            }
+
+            if (missing != null) {
+                throw new IllegalStateException(missing.size() + " archived chunks are missing from the source file "
+                        + "(" + describe(missing) + "); refusing to save a world without them");
+            }
+        }
+    }
+
+    public record Snapshot(@NotNull PolarChunkArchive archive, @NotNull @Unmodifiable Set<Long> positions,
+                           @Nullable SourceIndex source) {
+
+        public static final Snapshot EMPTY = new Snapshot(new PolarChunkArchive(), Set.of(), null);
 
         public boolean isEmpty() {
             return this.positions.isEmpty();
         }
 
         void readBodies(@NotNull @Unmodifiable Set<Long> wanted, @NotNull BodyReader out) {
-            this.archive.readBodies(wanted, out);
+            if (wanted.isEmpty()) return;
+            if (this.source == null) {
+                this.archive.readBodies(wanted, out);
+                return;
+            }
+            this.source.readBodies(wanted, out);
         }
     }
 }

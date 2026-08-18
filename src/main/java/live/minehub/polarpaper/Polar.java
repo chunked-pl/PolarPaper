@@ -239,8 +239,9 @@ public class Polar {
                                     PolarStreamLoader.addBlockEntity(blockEntity, levelChunk);
                                 }
                                 levelChunk.tryMarkSaved();
-                                PolarStreamLoader.insertChunk(level, levelChunk);
-                                worldAccess.loadChunkData(world, levelChunk, chunk.userData(), blockSelector);
+                                if (PolarStreamLoader.insertChunk(level, levelChunk)) {
+                                    worldAccess.loadChunkData(world, levelChunk, chunk.userData(), blockSelector);
+                                }
                                 return (Void) null;
                             }))
                             .whenComplete((_, ex) -> {
@@ -293,41 +294,37 @@ public class Polar {
         PolarStreamingGenerator generator = streamingGeneratorOf(world);
         if (generator == null) return CompletableFuture.completedFuture(false);
 
-        // The position stays archived for the whole of this method. Expanding the chunk takes long enough
-        // that a save can start in the middle, and a position that had already left the archive but was not
-        // live yet would be written to neither half of the file: the chunk would come back as air.
-        byte[] body;
-        try {
-            body = generator.getChunkArchive().claim(chunkX, chunkZ);
-        } catch (RuntimeException failure) {
-            return CompletableFuture.failedFuture(failure);
-        }
-        if (body == null) return CompletableFuture.completedFuture(false);
-
         Short version = generator.getVersion();
         Integer dataVersion = generator.getDataVersion();
-        if (version == null || dataVersion == null) {
-            generator.getChunkArchive().abandon(chunkX, chunkZ);
-            return CompletableFuture.failedFuture(new IllegalStateException(
-                    "World " + world.getKey() + " has archived chunks but was never read from polar data"));
-        }
-
         ServerLevel level = ((CraftWorld) world).getHandle();
         BlockSelector blockSelector = generator.getWorldBlockSelector();
         int sectionCount = level.getSectionsCount();
 
-        // Expanding a chunk means decompressing it, parsing two dozen sections, building their palettes and
-        // lighting them. None of that touches the live world, and doing it on the caller's thread would stall
-        // the server for as long as it takes, once per chunk, right as a player buys one.
+        // Claiming reads the chunk out of the world's file, and expanding it means decompressing it, parsing
+        // two dozen sections, building their palettes and lighting them. None of that touches the live world,
+        // and doing any of it on the caller's thread would stall the server for as long as it takes, once per
+        // chunk, right as a player buys one.
+        // The position stays archived until the chunk is live. Expanding takes long enough that a save can
+        // start in the middle, and a position that had already left the archive but was not live yet would be
+        // written to neither half of the file: the chunk would come back as air.
         return CompletableFuture
                 .supplyAsync(() -> {
+                    byte[] body = generator.getChunkArchive().claim(chunkX, chunkZ);
+                    if (body == null) return null;
+                    if (version == null || dataVersion == null) {
+                        throw new IllegalStateException("World " + world.getKey()
+                                + " has archived chunks but was never read from polar data");
+                    }
+
                     PolarChunk chunk = PolarReader.readChunkBody(PolarDataConverter.DEFAULT, version, dataVersion,
                             Unpooled.wrappedBuffer(body), sectionCount, chunkX, chunkZ);
                     NoUnloadLevelChunk levelChunk = chunk.createLevelChunk(level, blockSelector);
                     PolarStreamLoader.primeChunk(levelChunk);
                     return new PreparedChunk(chunk, levelChunk);
                 })
-                .thenCompose(prepared -> TaskFutures.runSync(PolarPaper.getPlugin(), () -> {
+                .thenCompose(prepared -> prepared == null
+                        ? CompletableFuture.completedFuture(false)
+                        : TaskFutures.runSync(PolarPaper.getPlugin(), () -> {
                     LevelChunk existing = liveChunkAt(level, chunkX, chunkZ);
                     if (existing != null) {
                         // Already standing there as an empty placeholder, so only its blocks change
@@ -344,7 +341,11 @@ public class Polar {
                         PolarStreamLoader.addBlockEntity(blockEntity, prepared.levelChunk());
                     }
                     prepared.levelChunk().tryMarkSaved();
-                    PolarStreamLoader.insertChunk(level, prepared.levelChunk());
+                    if (!PolarStreamLoader.insertChunk(level, prepared.levelChunk())) {
+                        // Left in the archive so that a later call can expand it once the position is free
+                        generator.getChunkArchive().abandon(chunkX, chunkZ);
+                        return false;
+                    }
                     generator.getWorldAccess().loadChunkData(world, prepared.levelChunk(), prepared.chunk().userData(), blockSelector);
                     retainChunk(world, chunkX, chunkZ);
                     generator.clearPlaceholderChunk(chunkX, chunkZ);
@@ -394,7 +395,9 @@ public class Polar {
                 .thenCompose(_ -> TaskFutures.runSync(PolarPaper.getPlugin(), () -> {
                     if (liveChunkAt(level, chunkX, chunkZ) != null) return false;
                     levelChunk.tryMarkSaved();
-                    PolarStreamLoader.insertChunk(level, levelChunk);
+                    if (!PolarStreamLoader.insertChunk(level, levelChunk)) {
+                        return false;
+                    }
                     retainChunk(world, chunkX, chunkZ);
                     // Saving must write the archived chunk for this position, not the empty one now standing
                     // there to be looked at
