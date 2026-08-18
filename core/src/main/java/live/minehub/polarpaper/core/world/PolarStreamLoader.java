@@ -263,7 +263,9 @@ public class PolarStreamLoader {
         return prepareChunkAsync(newLevelChunk).thenCompose(_ ->
                 TaskFutures.runSync(plugin, () -> {
                     newLevelChunk.tryMarkSaved();
-                    insertChunk(serverLevel, newLevelChunk);
+                    if (!insertChunk(serverLevel, newLevelChunk)) {
+                        return null;
+                    }
                     retainChunk(plugin, world, chunkX, chunkZ);
                     worldAccess.loadChunkData(world, newLevelChunk, userData, blockSelector);
                     chunkLight.applyTo(serverLevel, newLevelChunk);
@@ -370,7 +372,18 @@ public class PolarStreamLoader {
         lightEngine.starlight$serverRelightChunks(List.of(chunk.getPos()), _ -> {}, _ -> {});
     }
 
-    public static void insertChunk(ServerLevel serverLevel, NoUnloadLevelChunk newLevelChunk) {
+    /**
+     * Puts a chunk built by hand into the world, as though the chunk system had loaded it itself.
+     * <p>
+     * Refuses the position if the chunk system already holds a chunk of its own there, and returns false.
+     * That case is not ours to take over: the system finishes its own load afterwards and writes its chunk
+     * back into the holder, which would leave the holder carrying a half built chunk while the ticket level
+     * already says a finished one stands there. Everything that later asks the position to tick reads that
+     * as a finished chunk and fails on the cast.
+     *
+     * @return whether the chunk was put into the world
+     */
+    public static boolean insertChunk(ServerLevel serverLevel, NoUnloadLevelChunk newLevelChunk) {
         int chunkX = newLevelChunk.locX;
         int chunkZ = newLevelChunk.locZ;
 
@@ -384,13 +397,22 @@ public class PolarStreamLoader {
         ReentrantAreaLock.Node lock = chunkHolderManager.ticketLockArea.lock(chunkX, chunkZ);
         ReentrantAreaLock.Node lock1 = chunkTaskScheduler.schedulingLockArea.lock(chunkX, chunkZ);
         NewChunkHolder newChunkHolder;
+        boolean systemOwnsPosition;
         try {
             newChunkHolder = (NewChunkHolder) GET_OR_CREATE_CHUNK_HOLDER_HANDLE.invoke(chunkHolderManager, chunkX, chunkZ);
+            systemOwnsPosition = newChunkHolder.getCurrentChunk() != null;
         } catch (Throwable e) {
             throw new RuntimeException(e);
+        } finally {
+            chunkTaskScheduler.schedulingLockArea.unlock(lock1);
+            chunkHolderManager.ticketLockArea.unlock(lock);
         }
-        chunkTaskScheduler.schedulingLockArea.unlock(lock1);
-        chunkHolderManager.ticketLockArea.unlock(lock);
+
+        if (systemOwnsPosition) {
+            LOGGER.warn("Not inserting chunk at {} {} in {}, the chunk system is already loading it",
+                    chunkX, chunkZ, serverLevel.getWorld().getKey());
+            return false;
+        }
 
         newLevelChunk.needsDecoration = false;
         newLevelChunk.mustNotSave = true;
@@ -417,6 +439,7 @@ public class PolarStreamLoader {
         newLevelChunk.registerTickContainerInLevel(serverLevel);
 
         initializeEntityChunk(newChunkHolder);
+        return true;
     }
 
     public static void lightChunk(ServerLevel level, LevelChunk chunk) {
