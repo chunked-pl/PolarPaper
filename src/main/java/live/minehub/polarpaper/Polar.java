@@ -179,22 +179,17 @@ public class Polar {
     public static CompletableFuture<@Nullable World> createWorld(@Nullable PolarSource source, @NotNull String worldName,
                                                                  @NotNull Config config, @NotNull PolarWorldAccess worldAccess,
                                                                  @NotNull ChunkResidencyPolicy residency) {
-        byte[] worldBytes;
-        try {
-            worldBytes = source == null ? null : source.readBytes();
-        } catch (Exception e) {
-            LOGGER.error("Failed to load world " + worldName, e);
-            return CompletableFuture.failedFuture(e);
-        }
-
         PolarStreamingGenerator generator = new PolarStreamingGenerator(config, source, worldAccess);
         generator.getChunkArchive().bindSource(source);
         return createWorld(generator, worldName).thenComposeAsync(world -> {
             if (world == null) return CompletableFuture.completedFuture(null);
 
-            // stream() validates the header eagerly, so it can fail before it ever returns a future
+            // The file is read here rather than before the world is created, because this stage already runs
+            // off the caller's thread and the caller is usually the server's main one. A failed read unloads
+            // the empty world the same way a failed stream does.
             CompletableFuture<Void> streamed;
             try {
+                byte[] worldBytes = source == null ? null : source.readBytes();
                 streamed = worldBytes == null || worldBytes.length == 0
                         ? CompletableFuture.completedFuture(null)
                         : PolarStreamLoader.stream(worldBytes, world, PolarDataConverter.DEFAULT, worldAccess,
