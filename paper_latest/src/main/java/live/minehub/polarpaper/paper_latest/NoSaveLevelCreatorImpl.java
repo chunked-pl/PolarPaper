@@ -89,10 +89,6 @@ public class NoSaveLevelCreatorImpl implements NoSaveLevelCreator {
         WorldLoader.DataLoadContext context = craftServer.getServer().worldLoaderContext;
         RegistryAccess.Frozen registryAccess = context.datapackDimensions();
         net.minecraft.core.Registry<LevelStem> contextLevelStemRegistry = registryAccess.lookupOrThrow(Registries.LEVEL_STEM);
-        final LevelStem configuredStem = craftServer.getServer().registryAccess().lookupOrThrow(Registries.LEVEL_STEM).getValue(actualDimension);
-        if (configuredStem == null) {
-            throw new IllegalStateException("Missing configured level stem " + actualDimension);
-        }
 
         PaperWorldLoader.LoadedWorldData loadedWorldData = PaperWorldLoader.loadWorldData(
                 craftServer.getServer(),
