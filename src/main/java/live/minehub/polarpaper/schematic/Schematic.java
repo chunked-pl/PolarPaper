@@ -39,6 +39,11 @@ public class Schematic {
     private static final AtomicBoolean PASTE_RUNNING = new AtomicBoolean();
 
     public static void paste(PolarWorld polarWorld, Setter setter, Vector3i pasteOffset, Rotation rotation, IgnoreAir ignoreAir) {
+        if (Bukkit.isPrimaryThread()) {
+            pasteAllSynchronously(polarWorld, setter, pasteOffset, rotation, ignoreAir);
+            return;
+        }
+
         try {
             pasteAsync(polarWorld, setter, pasteOffset, rotation, ignoreAir).join();
         } catch (RuntimeException e) {
@@ -46,6 +51,20 @@ public class Schematic {
             if (cause instanceof RuntimeException runtime) throw runtime;
             throw e;
         }
+    }
+
+    private static void pasteAllSynchronously(PolarWorld polarWorld, Setter setter, Vector3i pasteOffset,
+                                              Rotation rotation, IgnoreAir ignoreAir) {
+        byte[] userData = polarWorld.userData();
+        Vector3i readOffset = WorldUserData.readSchematicOffset(userData);
+        Vector3i offset = readOffset == null ? new Vector3i() : readOffset;
+        Map<Vector3i, PolarChunk.BlockEntity> blockEntityMap = new HashMap<>();
+
+        for (PolarChunk chunk : polarWorld.chunks()) {
+            pasteChunk(chunk, setter, pasteOffset, rotation, offset, polarWorld.minSection(), ignoreAir, blockEntityMap);
+        }
+
+        finishPaste(polarWorld, setter, pasteOffset, rotation, offset, blockEntityMap, () -> {});
     }
 
     public static CompletableFuture<Void> pasteAsync(PolarWorld polarWorld, Setter setter, Vector3i pasteOffset, Rotation rotation, IgnoreAir ignoreAir) {
