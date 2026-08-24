@@ -6,6 +6,7 @@ import live.minehub.polarpaper.core.event.PolarEntitySpawnEvent;
 import live.minehub.polarpaper.core.userdata.EntitySerializer;
 import live.minehub.polarpaper.core.userdata.EntityUtil;
 import live.minehub.polarpaper.core.util.ByteArrayUtil;
+import live.minehub.polarpaper.core.util.TaskFutures;
 import live.minehub.polarpaper.core.world.PolarEntity;
 import live.minehub.polarpaper.core.world.BlockSelector;
 import live.minehub.polarpaper.core.world.PolarWorldAccess;
@@ -13,6 +14,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.chunk.ChunkAccess;
+import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.World;
 import org.bukkit.craftbukkit.CraftWorld;
@@ -108,6 +110,25 @@ public class EntitiesWorldAccess implements PolarWorldAccess {
     public void saveChunkData(@NotNull ChunkAccess chunk,
                               @NotNull Map<BlockPos, BlockEntity> blockEntities,
                               @NotNull Entity[] entities, @NotNull ByteBuf userData) {
+        Runnable write = () -> writeChunkUserData(chunk, blockEntities, entities, userData);
+        if (Bukkit.isPrimaryThread()) {
+            write.run();
+            return;
+        }
+
+        try {
+            TaskFutures.runSync(this.plugin, () -> {
+                write.run();
+                return null;
+            }).join();
+        } catch (Exception e) {
+            LOGGER.error("Failed to write chunk user data", e);
+        }
+    }
+
+    private void writeChunkUserData(@NotNull ChunkAccess chunk,
+                                    @NotNull Map<BlockPos, BlockEntity> blockEntities,
+                                    @NotNull Entity[] entities, @NotNull ByteBuf userData) {
         List<CompletableFuture<@Nullable PolarEntity>> entityFutures = new ArrayList<>();
         List<@NotNull PolarEntity> polarEntities = new ArrayList<>();
 

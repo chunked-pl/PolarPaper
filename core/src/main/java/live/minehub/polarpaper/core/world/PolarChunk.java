@@ -196,10 +196,16 @@ public record PolarChunk(
             World world, ChunkAccess chunkAccess, @Nullable ChunkEntitySlices entityChunk,
             PolarWorldAccess worldAccess, BlockSelector blockSelector, boolean saveLight, boolean asyncFinish) {
         CompletableFuture<ChunkSnapshot> snapshot = TaskFutures.runSync(worldAccess.getPlugin(),
-                () -> snapshotChunk(chunkAccess, entityChunk, worldAccess, blockSelector));
+                () -> {
+                    LevelLightEngine lightEngine = saveLight
+                            ? ((CraftWorld) world).getHandle().getLightEngine()
+                            : null;
+                    return snapshotChunk(chunkAccess, entityChunk, worldAccess, blockSelector,
+                            saveLight, lightEngine);
+                });
 
         Function<ChunkSnapshot, PolarChunk> buildChunk = chunkSnapshot ->
-                buildChunk(world, chunkAccess, worldAccess, blockSelector, saveLight, chunkSnapshot);
+                buildChunk(chunkAccess, worldAccess, blockSelector, chunkSnapshot);
 
         return asyncFinish
                 ? snapshot.thenApplyAsync(buildChunk)
@@ -211,6 +217,7 @@ public record PolarChunk(
             int minSectionY,
             boolean lightCorrect,
             SectionSnapshot[] sections,
+            SectionLight[] lights,
             List<BlockEntity> polarBlockEntities,
             Map<BlockPos, net.minecraft.world.level.block.entity.BlockEntity> blockEntities,
             org.bukkit.entity.Entity[] entities,
@@ -228,11 +235,20 @@ public record PolarChunk(
     }
 
     private static ChunkSnapshot snapshotChunk(ChunkAccess chunkAccess, @Nullable ChunkEntitySlices entityChunk,
-                                               PolarWorldAccess worldAccess, BlockSelector blockSelector) {
+                                               PolarWorldAccess worldAccess, BlockSelector blockSelector,
+                                               boolean saveLight, @Nullable LevelLightEngine lightEngine) {
         int sectionCount = chunkAccess.getSectionsCount();
         SectionSnapshot[] sections = new SectionSnapshot[sectionCount];
         for (int i = 0; i < sectionCount; i++) {
             sections[i] = snapshotSection(chunkAccess.getSection(i));
+        }
+
+        int highestBlockSection = highestNonEmptySection(sections);
+        SectionLight[] lights = new SectionLight[sectionCount];
+        for (int i = 0; i < sectionCount; i++) {
+            lights[i] = readSectionLight(lightEngine, chunkAccess.locX,
+                    chunkAccess.getMinSectionY() + i, chunkAccess.locZ,
+                    chunkAccess.isLightCorrect() && i > highestBlockSection);
         }
 
         RegistryAccess registryAccess = ((CraftServer) Bukkit.getServer()).getServer().registryAccess();
@@ -275,6 +291,7 @@ public record PolarChunk(
 
                 chunkAccess.isLightCorrect(),
                 sections,
+                lights,
                 polarBlockEntities,
                 blockEntities,
                 entities.toArray(new org.bukkit.entity.Entity[0]),
@@ -318,10 +335,8 @@ public record PolarChunk(
         };
     }
 
-    private static PolarChunk buildChunk(World world, ChunkAccess chunkAccess, PolarWorldAccess worldAccess,
-                                         BlockSelector blockSelector, boolean saveLight, ChunkSnapshot snapshot) {
-        ServerLevel serverLevel = ((CraftWorld) world).getHandle();
-        LevelLightEngine lightEngine = saveLight ? serverLevel.getLightEngine() : null;
+    private static PolarChunk buildChunk(ChunkAccess chunkAccess, PolarWorldAccess worldAccess,
+                                         BlockSelector blockSelector, ChunkSnapshot snapshot) {
         Registry<Biome> biomeRegistry = MinecraftServer.getServer().registryAccess().lookupOrThrow(Registries.BIOME);
 
         SectionSnapshot[] sectionSnapshots = snapshot.sections();
@@ -330,8 +345,7 @@ public record PolarChunk(
         PolarSection[] sections = new PolarSection[sectionSnapshots.length];
         for (int i = 0; i < sectionSnapshots.length; i++) {
             sections[i] = convertSection(snapshot.chunkX(), snapshot.chunkZ(), sectionSnapshots[i], biomeRegistry,
-                    blockSelector, snapshot.minSectionY(), i, lightEngine,
-                    snapshot.lightCorrect() && i > highestBlockSection);
+                    blockSelector, snapshot.minSectionY(), i, snapshot.lights()[i]);
         }
 
         ByteBuf userDataOutput = Unpooled.buffer();
@@ -348,9 +362,8 @@ public record PolarChunk(
         );
     }
 
-    private static PolarSection convertSection(int chunkX, int chunkZ, SectionSnapshot section, Registry<Biome> biomeRegistry, BlockSelector blockSelector, int minSection, int sectionI, @Nullable LevelLightEngine lightEngine, boolean openSky) {
+    private static PolarSection convertSection(int chunkX, int chunkZ, SectionSnapshot section, Registry<Biome> biomeRegistry, BlockSelector blockSelector, int minSection, int sectionI, SectionLight light) {
         int sectionY = minSection + sectionI;
-        SectionLight light = readSectionLight(lightEngine, chunkX, sectionY, chunkZ, openSky);
 
         if (section.onlyAir()) return createAirSection(light);
 

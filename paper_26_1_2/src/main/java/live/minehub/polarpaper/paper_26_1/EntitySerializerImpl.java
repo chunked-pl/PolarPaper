@@ -13,6 +13,7 @@ import net.minecraft.world.level.storage.ValueInput;
 import org.bukkit.World;
 import org.bukkit.craftbukkit.CraftWorld;
 import org.bukkit.craftbukkit.entity.CraftEntity;
+import org.bukkit.Bukkit;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
 import org.bukkit.plugin.Plugin;
@@ -63,10 +64,14 @@ public class EntitySerializerImpl implements EntitySerializer {
         TagValueOutput tagValueOutput = TagValueOutput.createWithContext(problemReporter, nmsEntity.registryAccess());
 
         boolean successful;
-        try {
-            successful = nmsEntity.saveAsPassenger(tagValueOutput, true, false, false);
-        } catch (Exception e) {
-
+        if (Bukkit.isPrimaryThread()) {
+            try {
+                successful = nmsEntity.saveAsPassenger(tagValueOutput, true, false, false);
+            } catch (Exception e) {
+                LOGGER.error("Failed to serialize entity {}", entity.getUniqueId(), e);
+                successful = false;
+            }
+        } else {
             successful = EntitySerializer.saveOnEntityThread(entity, plugin,
                     () -> nmsEntity.saveAsPassenger(tagValueOutput, true, false, false));
         }
