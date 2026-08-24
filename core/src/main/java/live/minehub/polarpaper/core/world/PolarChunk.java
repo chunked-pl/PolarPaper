@@ -65,7 +65,7 @@ public record PolarChunk(
             HEIGHTMAP_WORLD_SURFACE,
             HEIGHTMAP_WORLD_SURFACE_WG,
     };
-    static final int HEIGHTMAP_SIZE = 16 * 16; // Chunk Size X * Chunk Size Z
+    static final int HEIGHTMAP_SIZE = 16 * 16;
     static final int MAX_HEIGHTMAPS = 32;
 
     private static final String AIR_PALETTE_ENTRY = "minecraft:air";
@@ -73,7 +73,6 @@ public record PolarChunk(
     private static final int UNUSED_PALETTE_ENTRY = -1;
     private static final int NO_SECTION = -1;
 
-    /** The packed storage of a section that holds a single value throughout, which stores nothing per entry. */
     private static final long[] ZERO_STORAGE = new long[0];
 
     public int @Nullable [] heightmap(int type) {
@@ -89,7 +88,7 @@ public record PolarChunk(
     }
 
     public PolarChunk(int x, int z, int sectionCount) {
-        // Blank chunk
+
         this(x, z, new PolarSection[sectionCount], new BlockEntity[0], new int[PolarChunk.MAX_HEIGHTMAPS][], new byte[0]);
         Arrays.setAll(sections, _ -> new PolarSection());
     }
@@ -139,29 +138,10 @@ public record PolarChunk(
 
     }
 
-    /**
-     * Converts a bukkit world chunk to a polar chunk without light data
-     * @param world The bukkit world
-     * @param chunkX The X coordinate of the chunk in the bukkit world
-     * @param chunkZ The Z coordinate of the chunk in the bukkit world
-     * @param blockSelector Used to filter which blocks are converted
-     * @param loadChunks Whether to load chunks
-     * @return The new PolarChunk, null if bukkit world chunk is empty
-     */
     public static CompletableFuture<@Nullable PolarChunk> convert(World world, int chunkX, int chunkZ, PolarWorldAccess worldAccess, BlockSelector blockSelector, boolean loadChunks) {
         return convert(world, chunkX, chunkZ, worldAccess, blockSelector, false, loadChunks);
     }
 
-    /**
-     * Converts a bukkit world chunk to a polar chunk
-     * @param world The bukkit world
-     * @param chunkX The X coordinate of the chunk in the bukkit world
-     * @param chunkZ The Z coordinate of the chunk in the bukkit world
-     * @param blockSelector Used to filter which blocks are converted
-     * @param saveLight Whether to save light data
-     * @param loadChunks Whether to load chunks
-     * @return The new PolarChunk, null if bukkit world chunk is empty
-     */
     public static CompletableFuture<@Nullable PolarChunk> convert(World world, int chunkX, int chunkZ, PolarWorldAccess worldAccess, BlockSelector blockSelector, boolean saveLight, boolean loadChunks) {
         ServerLevel serverLevel = ((CraftWorld) world).getHandle();
 
@@ -174,17 +154,13 @@ public record PolarChunk(
                     worldAccess, blockSelector, saveLight, true);
         }
 
-        // Chunk is not already loaded
-
         if (!loadChunks) return CompletableFuture.completedFuture(null);
 
         CompletableFuture<@Nullable PolarChunk> future = new CompletableFuture<>();
 
-        // FULL required when saving light; FEATURES sufficient otherwise
         ChunkStatus status = saveLight ? ChunkStatus.FULL : ChunkStatus.FEATURES;
         serverLevel.moonrise$getChunkTaskScheduler().scheduleChunkLoad(chunkX, chunkZ, status, true, Priority.LOW, chunkAccess -> {
-            // Anything thrown in here is thrown inside the chunk system, which would leave this future
-            // pending forever and hang the save that is waiting on it
+
             try {
                 NewChunkHolder loadedHolder = chunkHolderManager.getChunkHolder(chunkX, chunkZ);
                 if (isChunkEmpty(loadedHolder)) {
@@ -216,18 +192,6 @@ public record PolarChunk(
         return convertInternal(world, chunkAccess, entityChunk, worldAccess, blockSelector, saveLight, false).join();
     }
 
-    /**
-     * Converts one chunk in two stages: a snapshot taken on the thread that owns the world, then the work of
-     * turning it into the saved form off that thread.
-     * <p>
-     * Everything that reads the live chunk happens inside the one main thread task, so nothing can change
-     * underneath it. Turning blocks into palette strings, compacting and repacking them is by far the more
-     * expensive half and touches nothing but the snapshot, so it stays off the main thread.
-     * <p>
-     * Failures are deliberately not swallowed here. A chunk that cannot be converted must fail the whole
-     * save, because writing the file without it would replace a good world with one that is missing part of
-     * itself.
-     */
     private static CompletableFuture<PolarChunk> convertInternal(
             World world, ChunkAccess chunkAccess, @Nullable ChunkEntitySlices entityChunk,
             PolarWorldAccess worldAccess, BlockSelector blockSelector, boolean saveLight, boolean asyncFinish) {
@@ -242,9 +206,6 @@ public record PolarChunk(
                 : snapshot.thenApply(buildChunk);
     }
 
-    /**
-     * Everything the saved chunk is built out of, read in one go while the world cannot change.
-     */
     private record ChunkSnapshot(
             int chunkX, int chunkZ,
             int minSectionY,
@@ -257,12 +218,6 @@ public record PolarChunk(
     ) {
     }
 
-    /**
-     * One section's blocks and biomes, detached from the section they came from.
-     * <p>
-     * The packed storage is copied because the section keeps writing to its own; the palettes are resolved
-     * through {@link PolarChunk#snapshotPalette}, which explains why holding on to them is safe.
-     */
     private record SectionSnapshot(
             boolean onlyAir,
             long[] blockStorage, int blockBits, IntFunction<BlockState> blockPalette,
@@ -272,9 +227,6 @@ public record PolarChunk(
                 new SectionSnapshot(true, ZERO_STORAGE, 0, _ -> null, ZERO_STORAGE, List.of());
     }
 
-    /**
-     * Reads everything the conversion needs off the live chunk. Must run on the thread that owns the world.
-     */
     private static ChunkSnapshot snapshotChunk(ChunkAccess chunkAccess, @Nullable ChunkEntitySlices entityChunk,
                                                PolarWorldAccess worldAccess, BlockSelector blockSelector) {
         int sectionCount = chunkAccess.getSectionsCount();
@@ -306,8 +258,6 @@ public record PolarChunk(
             blockEntities.put(blockPos, blockEntity);
         }
 
-        // Entity slices are not safe to walk while the world ticks, so the list is taken here even though the
-        // entities themselves are serialised later
         List<org.bukkit.entity.Entity> entities = new ArrayList<>();
         if (entityChunk != null) {
             for (net.minecraft.world.entity.Entity entity : entityChunk.getAllEntities()) {
@@ -322,8 +272,7 @@ public record PolarChunk(
         return new ChunkSnapshot(
                 chunkAccess.locX, chunkAccess.locZ,
                 chunkAccess.getMinSectionY(),
-                // Where a chunk's open sky begins is only known once it has been lit; an unlit one is saved
-                // without any light at all, so that whoever reads it back lights it themselves
+
                 chunkAccess.isLightCorrect(),
                 sections,
                 polarBlockEntities,
@@ -337,8 +286,6 @@ public record PolarChunk(
     private static SectionSnapshot snapshotSection(LevelChunkSection section) {
         if (section.hasOnlyAir()) return SectionSnapshot.ONLY_AIR;
 
-        // Read once each: a section that grows past its palette width replaces this whole object, so reading
-        // the storage and the palette out of the same one keeps them describing the same blocks
         PalettedContainer.Data<BlockState> blockData = section.getStates().data;
         PalettedContainer.Data<Holder<Biome>> biomeData = ((PalettedContainer<Holder<Biome>>) section.getBiomes()).data;
 
@@ -351,18 +298,11 @@ public record PolarChunk(
         return new SectionSnapshot(
                 false,
                 blockData.storage().getRaw().clone(), blockData.storage().getBits(), snapshotPalette(blockData.palette()),
-                // Kept in the layout the game already packed it in, which readers recover exactly
+
                 biomeData.storage().getRaw().clone(), biomePaletteValues
         );
     }
 
-    /**
-     * A palette that can be read from any thread afterwards.
-     * <p>
-     * Ordinary palettes only ever gain entries, never reassign them, but the structure holding them is not
-     * safe to read while it grows, so the entries are copied out. A global palette is the whole block state
-     * registry: far too large to copy, and frozen once the server is up, so it is read directly.
-     */
     private static IntFunction<BlockState> snapshotPalette(Palette<BlockState> palette) {
         if (palette instanceof GlobalPalette<BlockState>) return palette::valueFor;
 
@@ -378,9 +318,6 @@ public record PolarChunk(
         };
     }
 
-    /**
-     * Turns a snapshot into the chunk as it is saved. Runs off the main thread, and reads nothing live.
-     */
     private static PolarChunk buildChunk(World world, ChunkAccess chunkAccess, PolarWorldAccess worldAccess,
                                          BlockSelector blockSelector, boolean saveLight, ChunkSnapshot snapshot) {
         ServerLevel serverLevel = ((CraftWorld) world).getHandle();
@@ -420,8 +357,6 @@ public record PolarChunk(
         long[] biomeData;
         List<String> biomePaletteStrings = new ArrayList<>();
 
-        // Working on the snapshot's own copy of the blocks, so masking and compacting cannot disturb the
-        // world being saved
         IntFunction<BlockState> sourcePalette = section.blockPalette();
         int[] blockIndices = unpackIndices(section.blockStorage(), section.blockBits());
         List<String> blockPaletteStrings = compactPalette(index -> BlockStateCodec.toPaletteString(sourcePalette.apply(index)), blockIndices);
@@ -437,25 +372,20 @@ public record PolarChunk(
                 blockIndices[index] = airIndex;
             }
 
-            // Blanking blocks can orphan whatever they used to reference, so compact what is left
             List<String> maskedPalette = blockPaletteStrings;
             blockPaletteStrings = compactPalette(maskedPalette::get, blockIndices);
         }
 
-        // A single entry palette needs no data at all, the reader fills the section with that one block
         long[] blockData = blockPaletteStrings.size() > 1
                 ? PaletteUtil.pack(blockIndices, packedBitsFor(blockPaletteStrings.size()))
                 : null;
 
-        // Resolved by index rather than by filtering the palette: dropping an entry that cannot be read would
-        // shift every later index, silently reassigning the biome of every block that referenced them.
         for (Holder<Biome> biome : section.biomePalette()) {
             biomePaletteStrings.add(biomeKeyOrDefault(biomeRegistry, biome));
         }
 
         biomeData = section.biomeStorage();
 
-        // sanity check
         if (biomeData.length == 0 && biomePaletteStrings.size() > 1) {
             biomePaletteStrings = List.of(biomePaletteStrings.getFirst());
             biomeData = null;
@@ -469,10 +399,6 @@ public record PolarChunk(
         );
     }
 
-    /**
-     * The section a run of nothing but air is saved as, which is a single flag in the file once there is no
-     * light to record alongside it.
-     */
     private static PolarSection createAirSection(SectionLight light) {
         if (light.blockLightContent() == PolarSection.LightContent.MISSING
                 && light.skyLightContent() == PolarSection.LightContent.MISSING) {
@@ -485,9 +411,6 @@ public record PolarChunk(
         );
     }
 
-    /**
-     * The light of one section as it is saved.
-     */
     private record SectionLight(
             PolarSection.LightContent blockLightContent, byte @Nullable [] blockLight,
             PolarSection.LightContent skyLightContent, byte @Nullable [] skyLight
@@ -498,11 +421,6 @@ public record PolarChunk(
         );
     }
 
-    /**
-     * Reads a section's light out of the light engine.
-     *
-     * @param openSky whether the section sits above every block in its chunk, where sky light is always full
-     */
     private static SectionLight readSectionLight(@Nullable LevelLightEngine lightEngine, int chunkX, int sectionY, int chunkZ, boolean openSky) {
         if (lightEngine == null) return SectionLight.NONE;
 
@@ -510,9 +428,6 @@ public record PolarChunk(
         DataLayer blockLightLayer = lightEngine.getLayerListener(LightLayer.BLOCK).getDataLayerData(sectionPos);
         DataLayer skyLightLayer = lightEngine.getLayerListener(LightLayer.SKY).getDataLayerData(sectionPos);
 
-        // A sky layer the engine holds no storage for is not light that went missing: over open sky that is
-        // how starlight records "fully lit", so it is saved as such and the file keeps describing its own
-        // light for whichever reader picks it up next.
         PolarSection.LightContent skyLightContent = openSky ? PolarSection.LightContent.FULL : PolarSection.LightContent.MISSING;
         if (skyLightLayer != null) skyLightContent = LightUtil.getLightContent(skyLightLayer);
 
@@ -524,10 +439,6 @@ public record PolarChunk(
         );
     }
 
-    /**
-     * The index of the highest section holding blocks, or {@link #NO_SECTION} for a chunk that is only air.
-     * Everything above it is open sky.
-     */
     private static int highestNonEmptySection(SectionSnapshot[] sections) {
         for (int sectionIndex = sections.length - 1; sectionIndex >= 0; sectionIndex--) {
             if (!sections[sectionIndex].onlyAir()) return sectionIndex;
@@ -543,7 +454,6 @@ public record PolarChunk(
 
         ChunkEntitySlices entityChunk = chunkHolder.getEntityChunk();
 
-        // if any entities that should be saved, return false
         if (entityChunk != null) {
             for (net.minecraft.world.entity.Entity nmsEntity : entityChunk.getAllEntities()) {
                 if (!nmsEntity.shouldBeSaved()) continue;
@@ -551,7 +461,6 @@ public record PolarChunk(
             }
         }
 
-        // if any non-air sections, return false
         for (LevelChunkSection section : chunkAccess.getSections()) {
             if (section.hasOnlyAir()) continue;
             return false;
@@ -560,10 +469,6 @@ public record PolarChunk(
         return true;
     }
 
-    /**
-     * The key a biome is saved under, falling back to the default biome for entries this server cannot name,
-     * so that the entry keeps its place in the palette.
-     */
     private static String biomeKeyOrDefault(Registry<Biome> biomeRegistry, Holder<Biome> biomeHolder) {
         if (biomeHolder != null && biomeHolder.value() instanceof Biome biome) {
             Identifier key = biomeRegistry.getKey(biome);
@@ -574,32 +479,15 @@ public record PolarChunk(
         return DEFAULT_BIOME_PALETTE_ENTRY;
     }
 
-    /**
-     * The palette index of every block of a section, unpacked from the copy the snapshot took.
-     * <p>
-     * Laid out exactly as the game packs it: whole entries per long, with the leftover top bits unused, so
-     * this recovers the same indices the section itself would report.
-     */
     private static int[] unpackIndices(long[] storage, int bits) {
         int[] indices = new int[PolarSection.BLOCK_PALETTE_SIZE];
-        // A section holding a single block throughout stores nothing per block, so every index is its first
-        // and only palette entry
+
         if (bits == 0 || storage.length == 0) return indices;
 
         PaletteUtil.unpack(indices, storage, bits);
         return indices;
     }
 
-    /**
-     * Rewrites {@code indices} to reference only the palette entries they actually use, returning that palette.
-     * <p>
-     * Editing a world only ever grows a section's palette, so without this a saved section keeps entries for
-     * blocks that were removed long ago. Every unused entry can push the palette over a power of two and cost
-     * a bit on all 4096 blocks, in the file and in the loaded world alike. A section that overflowed to the
-     * global palette would otherwise store every block state the server knows.
-     *
-     * @param resolveEntry maps an index of the current palette to the string the polar format stores it as
-     */
     private static List<String> compactPalette(IntFunction<String> resolveEntry, int[] indices) {
         int maxIndex = 0;
         for (int index : indices) {
@@ -621,13 +509,6 @@ public record PolarChunk(
         return palette;
     }
 
-    /**
-     * The number of bits a section's blocks are packed with.
-     * <p>
-     * Readers recover the bit count from the length of the packed array, which is ambiguous for a few counts:
-     * a 4096 entry section packs to the same 820 longs at both 11 and 12 bits. Rounding up to the next count
-     * that survives the round trip keeps a compacted palette readable, at worst costing one bit per block.
-     */
     private static int packedBitsFor(int paletteSize) {
         int bits = Mth.ceillog2(paletteSize);
         while (!roundTripsThroughPackedLength(bits)) {
@@ -642,12 +523,6 @@ public record PolarChunk(
         return PaletteUtil.getBitsForLongLength(longLength, PolarSection.BLOCK_PALETTE_SIZE) == bits;
     }
 
-    /**
-     * The light of a layer as it should be saved, or null if it is uniform and therefore fully described by
-     * its {@link PolarSection.LightContent}.
-     * <p>
-     * Copied because the light engine keeps writing to the layer while the world is being saved.
-     */
     private static byte @Nullable [] copyLightData(DataLayer dataLayer) {
         if (dataLayer.isDefinitelyHomogenous()) return null;
         return dataLayer.getData().clone();

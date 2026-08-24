@@ -96,8 +96,6 @@ public class DeleteCommand extends PolarCmd {
             return;
         }
 
-        // Unloaded first: a world that is still running would autosave (or save on stop) straight back over
-        // the file that was just deleted
         UnloadCommand.bukkitUnload(ctx, world).thenAccept(unloaded -> {
             if (!unloaded) {
                 ctx.getSource().getSender().sendMessage(

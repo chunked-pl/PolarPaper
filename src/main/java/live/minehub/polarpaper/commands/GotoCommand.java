@@ -43,7 +43,7 @@ public class GotoCommand extends PolarCmd {
             Path worldsFolder = pluginFolder.resolve("worlds");
             Path path = worldsFolder.resolve(worldId.getPath() + ".polar");
 
-            if (Files.exists(path)) { // world exists, just isn't loaded
+            if (Files.exists(path)) {
                 sender.sendMessage(Component.text()
                         .append(Component.text("World '", NamedTextColor.RED))
                         .append(Component.text(worldId.getPath(), NamedTextColor.RED))
@@ -68,8 +68,7 @@ public class GotoCommand extends PolarCmd {
         }
 
         PolarGenerator polarGenerator = PolarGenerator.fromWorld(bukkitWorld);
-        // Non polar worlds have no polar config, so fall back to the world's own spawn.
-        // Copied either way, so teleporting cannot move the spawn stored in the config.
+
         Location spawnPos = polarGenerator == null
                 ? bukkitWorld.getSpawnLocation()
                 : Config.readFromConfig(PolarPaper.getPlugin().getConfig(), bukkitWorld).spawn().clone();

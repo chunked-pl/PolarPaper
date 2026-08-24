@@ -52,10 +52,6 @@ public class PolarStreamingGenerator extends PolarGenerator {
         this.dataVersion = dataVersion;
     }
 
-    /**
-     * The polar version and data version the world was streamed from. Blank worlds and worlds created from an
-     * in memory PolarWorld were never read from polar data, so they have neither.
-     */
     private @NotNull String versionString() {
         if (version == null) return "none (world was not read from polar data)";
         return version + " (" + dataVersion + ")";

@@ -53,14 +53,14 @@ public class ConvertCommand extends PolarCmd {
 
     private int execute(CommandContext<CommandSourceStack> ctx, boolean saveLight) {
         CommandSender sender = ctx.getSource().getSender();
-        // Being ran from console
+
         if (!(sender instanceof Player player)) return Command.SINGLE_SUCCESS;
 
         World bukkitWorld = player.getWorld();
         NamespacedKey worldKey = bukkitWorld.getKey();
 
         String newWorldName = ctx.getArgument("new world name", String.class);
-        Integer chunkRadius = ctx.getArgument("chunk radius", Integer.class);
+        int chunkRadius = Math.clamp(ctx.getArgument("chunk radius", Integer.class), 1, 4096);
 
         NamespacedKey newWorldKey = NamespacedKey.fromString(newWorldName, PolarPaper.getPlugin());
         if (newWorldKey == null) {
@@ -68,7 +68,6 @@ public class ConvertCommand extends PolarCmd {
             return Command.SINGLE_SUCCESS;
         }
 
-        // The name becomes a file name in the worlds folder, so it must not be able to point outside it
         if (WorldKey.validatePath(sender, newWorldName) == null) return Command.SINGLE_SUCCESS;
 
         PolarGenerator polarGenerator = PolarGenerator.fromWorld(bukkitWorld);
@@ -163,7 +162,7 @@ public class ConvertCommand extends PolarCmd {
                     }
                     return b.buildFuture();
                 })
-                .then(Commands.argument("chunk radius", IntegerArgumentType.integer(1))
+                .then(Commands.argument("chunk radius", IntegerArgumentType.integer(1, 4096))
                         .executes(this::execute)
                         .then(Commands.argument("save light", BoolArgumentType.bool())
                                 .executes(this::executeWithLight))

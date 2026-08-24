@@ -28,7 +28,7 @@ public class RenameCommand extends PolarCmd {
     }
 
     private static int run(CommandContext<CommandSourceStack> ctx) {
-        // Declared as a plain string argument, so it has to be read back as one
+
         String worldName = ctx.getArgument("world name", String.class);
         String newWorldName = ctx.getArgument("new world name", String.class);
 
@@ -58,7 +58,7 @@ public class RenameCommand extends PolarCmd {
     }
 
     private static void renameWorld(CommandContext<CommandSourceStack> ctx, String worldName, String newName) {
-        // Both names come straight from the sender, so neither may resolve outside the worlds folder
+
         Path path = WorldKey.validatePath(ctx.getSource().getSender(), worldName);
         if (path == null) return;
         Path newPath = WorldKey.validatePath(ctx.getSource().getSender(), newName);

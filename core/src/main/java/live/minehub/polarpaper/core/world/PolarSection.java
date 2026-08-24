@@ -27,12 +27,6 @@ import org.slf4j.LoggerFactory;
 import java.util.Arrays;
 import java.util.List;
 
-/**
- * Representation of the latest version of the section format.
- * <p>
- * Marked as internal because of the use of mutable arrays. These arrays must _not_ be mutated.
- * This class should be considered immutable.
- */
 @ApiStatus.Internal
 public class PolarSection {
     private static final Logger LOGGER = LoggerFactory.getLogger(PolarSection.class);
@@ -117,10 +111,6 @@ public class PolarSection {
         return blockPalette;
     }
 
-    /**
-     * Returns the uncompressed palette data. Each int corresponds to an index in the palette.
-     * Always has a length of 4096.
-     */
     public long[] blockData() {
         assert blockData != null : "must check length of blockPalette() before using blockData()";
         return blockData;
@@ -130,10 +120,6 @@ public class PolarSection {
         return biomePalette;
     }
 
-    /**
-     * Returns the uncompressed palette data. Each int corresponds to an index in the palette.
-     * Always has a length of 256.
-     */
     public long[] biomeData() {
         assert biomeData != null : "must check length of biomePalette() before using biomeData()";
         return biomeData;
@@ -157,16 +143,6 @@ public class PolarSection {
         return skyLight;
     }
 
-    /**
-     * Builds the chunk section this represents, in the position it belongs to.
-     * <p>
-     * Everything is created through the level's own {@link PalettedContainerFactory}, the way vanilla builds
-     * sections when loading a chunk. Building the strategies here instead would give every single section its
-     * own copy of the global palette and of the biome id map, all of which the factory already holds once for
-     * the whole server, and would hide the preset states anti-xray needs.
-     *
-     * @param sectionY the section's position in the world, not its index within the chunk
-     */
     public LevelChunkSection createLevelChunkSection(ServerLevel level, ChunkPos chunkPos, int sectionY) {
         PalettedContainerFactory containerFactory = level.palettedContainerFactory();
         if (empty) return new LevelChunkSection(containerFactory, level, chunkPos, sectionY);
@@ -213,7 +189,7 @@ public class PolarSection {
     private static <T> PalettedContainer.Data<T> createPaletteData(T[] palette, long @Nullable [] data, Strategy<T> strategy) {
         int bitsPerEntry = Mth.ceillog2(palette.length);
         if (data == null || data.length == 0 || bitsPerEntry == 0) {
-            // One entry fills the whole section, which needs no per block storage at all
+
             Configuration configuration = PaletteUtil.getConfigurationForBitCount(strategy, 0);
             return new PalettedContainer.Data<>(
                     configuration,
@@ -238,15 +214,11 @@ public class PolarSection {
         }
     }
 
-    /**
-     * The saved blocks in the layout the game keeps them in, repacking only when the width they were saved at
-     * differs from the one this palette configuration uses in memory.
-     */
     private static long[] repackForStorage(long[] data, int bitsPerEntry, Configuration configuration, Strategy<?> strategy) {
         int valuesPerLong = Long.SIZE / configuration.bitsInMemory();
         int requiredLength = (strategy.entryCount() + valuesPerLong - 1) / valuesPerLong;
         if (!configuration.alwaysRepack() && configuration.bitsInMemory() == bitsPerEntry && data.length == requiredLength) {
-            return data.clone(); // already the right layout, but the section must not write into the saved array
+            return data.clone();
         }
 
         int[] unpacked = new int[strategy.entryCount()];

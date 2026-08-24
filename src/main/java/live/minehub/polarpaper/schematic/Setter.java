@@ -98,7 +98,6 @@ public interface Setter {
             CraftWorld craftWorld = (CraftWorld) world;
             ServerLevel serverLevel = craftWorld.getHandle();
 
-            // relight chunks and resend blocks to client
             serverLevel.getChunkSource().getLightEngine().starlight$serverRelightChunks(vecsToChunkPos(chunksToRefresh), _ -> {}, _ -> {});
             Bukkit.getScheduler().runTask(PolarPaper.getPlugin(), () -> {
                 for (Vector2i c : chunksToRefresh) world.refreshChunk(c.x(), c.y());

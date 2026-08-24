@@ -49,7 +49,6 @@ public class ByteArrayUtil {
         bb.skipBytes(length * Long.BYTES);
     }
 
-    // Copyright 2019 Google LLC
     public static int getVarInt(ByteBuf bb) {
         int result = 0;
         for (int position = 0; position < Integer.BYTES + 1; position++) {
@@ -105,8 +104,6 @@ public class ByteArrayUtil {
         bb.readBytes(bytes);
         return bytes;
     }
-
-
 
     public static void writeBlockEntity(@NotNull ByteBuf bb, @NotNull PolarChunk.BlockEntity blockEntity) {
         bb.writeInt(blockEntity.index());

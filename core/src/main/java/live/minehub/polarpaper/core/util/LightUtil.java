@@ -18,21 +18,6 @@ public class LightUtil {
         Arrays.fill(FULLY_LIT_CONTENT, (byte) -1);
     }
 
-    /**
-     * Builds the nibble array a chunk section is lit with.
-     * <p>
-     * Uniformly dark and uniformly lit sections are fully described by {@code lightContent}, so they are only
-     * expanded here instead of being held as a 2 KiB array on every {@link PolarSection} of a loaded world.
-     * <p>
-     * A fully dark section needs no array at all. An uninitialised nibble already reads as light level 0, is
-     * sent to clients as an empty section rather than 2 KiB of zeroes, and allocates itself the first time
-     * starlight writes to it. This is the same state already used for sections that were saved without light.
-     * <p>
-     * Where an array is needed it is freshly allocated, because starlight writes to it and one PolarWorld may
-     * be used to create several bukkit worlds.
-     *
-     * @param data the raw nibble data, only read when {@code lightContent} is {@link PolarSection.LightContent#PRESENT}
-     */
     public static @NotNull SWMRNibbleArray createNibbleArray(@NotNull PolarSection.LightContent lightContent, byte @Nullable [] data) {
         return switch (lightContent) {
             case MISSING, EMPTY -> new SWMRNibbleArray();
@@ -41,14 +26,6 @@ public class LightUtil {
         };
     }
 
-    /**
-     * Builds the sky nibble of a section that open sky reaches, which starlight reads as light level 15
-     * without any storage at all.
-     * <p>
-     * The distinction from the array {@link #createNibbleArray} builds for missing light is the state, not the
-     * absent data: an uninitialised nibble reads as 0 and is sent to clients as an unlit section, while a null
-     * one is what both starlight and the vanilla client take as "open sky above, so fully lit".
-     */
     public static @NotNull SWMRNibbleArray createOpenSkyNibbleArray() {
         return new SWMRNibbleArray(null, true);
     }

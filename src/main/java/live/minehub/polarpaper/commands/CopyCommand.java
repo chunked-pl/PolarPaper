@@ -92,7 +92,7 @@ public class CopyCommand extends PolarCmd {
                 }
 
                 PolarGenerator generator = PolarGenerator.fromWorld(world);
-                if (generator != null) generator.setSource(new FilePolarSource(path)); // change source to the path so it can be saved/autosaved properly
+                if (generator != null) generator.setSource(new FilePolarSource(path));
 
                 sender.sendMessage(
                         Component.text()

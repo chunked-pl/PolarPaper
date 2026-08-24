@@ -25,13 +25,6 @@ public class PolarReader {
     private static final int MAX_BLOCK_PALETTE_SIZE = 16 * 16 * 16;
     private static final int MAX_BIOME_PALETTE_SIZE = 8 * 8 * 8;
 
-    /**
-     * The largest buffer a file is allowed to ask for when its zstd frame does not declare its own size.
-     * <p>
-     * The uncompressed length is read straight out of the header and is what the destination array is sized
-     * at, so a truncated or hostile file could otherwise make the server allocate gigabytes and die of an
-     * OutOfMemoryError before a single block has been read.
-     */
     private static final int MAX_UNDECLARED_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024;
 
     public static @NotNull PolarWorld read(PolarSource source) throws IOException {
@@ -67,25 +60,18 @@ public class PolarReader {
                 ? getVarInt(bb)
                 : dataConverter.defaultDataVersion();
 
-//        PolarPaper.logger().info("Polar version: " + version + " (" + dataVersion + ")");
-
-
         byte compressionByte = bb.readByte();
         PolarWorld.CompressionType compression = PolarWorld.CompressionType.fromId(compressionByte);
         assertThat(compression != null, "Invalid compression type");
 
-//        PolarPaper.logger().info("Polar compression: " + compression.name());
-
         int compressedDataLength = getVarInt(bb);
 
-        // Replace the buffer with a "decompressed" version.
         ByteBuf uncompressed = decompressBuffer(bb, compression, compressedDataLength);
 
         byte minSection = uncompressed.readByte();
         byte maxSection = uncompressed.readByte();
         assertThat(minSection < maxSection, "Invalid section range");
 
-        // User (world) data
         byte[] userData = new byte[0];
         if (version > PolarWorld.VERSION_WORLD_USERDATA) {
             userData = getByteArray(uncompressed);
@@ -107,12 +93,6 @@ public class PolarReader {
         return readChunkBody(dataConverter, version, dataVersion, bb, sectionCount, chunkX, chunkZ);
     }
 
-    /**
-     * Reads everything a chunk consists of apart from its coordinates, which the caller has to supply.
-     * <p>
-     * Split out from {@link #readChunk} so that a chunk kept aside by {@link PolarChunkArchive} can be read
-     * back on its own, without the surrounding world.
-     */
     public static @NotNull PolarChunk readChunkBody(@NotNull PolarDataConverter dataConverter, short version, int dataVersion,
                                                     @NotNull ByteBuf bb, int sectionCount, int chunkX, int chunkZ) {
         PolarSection[] sections = new PolarSection[sectionCount];
@@ -126,7 +106,6 @@ public class PolarReader {
             blockEntities[i] = readBlockEntity(dataConverter, dataVersion, bb);
         }
 
-        // If the version is set to 8 copy the contents over to the beginning of userdata
         List<PolarEntity> entities = null;
         if (version == PolarWorld.VERSION_DEPRECATED_ENTITIES) {
             entities = new ArrayList<>();
@@ -145,7 +124,6 @@ public class PolarReader {
 
         int[][] heightmaps = readHeightmaps(bb);
 
-        // Objects
         byte[] userData = getByteArray(bb);
 
         if (entities != null) {
@@ -165,10 +143,6 @@ public class PolarReader {
         );
     }
 
-    /**
-     * Consumes a chunk body without building palettes or section objects. The chunk coordinates must already
-     * have been read. Used by the streaming loader for chunks completely outside the configured world radius.
-     */
     protected static void skipChunkBody(short version, @NotNull ByteBuf bb, int sectionCount) {
         for (int i = 0; i < sectionCount; i++) skipSection(version, bb);
 
@@ -216,7 +190,7 @@ public class PolarReader {
         if (bb.readByte() != 1) return;
 
         try (ByteBufInputStream input = new ByteBufInputStream(bb)) {
-            NbtIo.readAnyTag(input, NbtAccounter.unlimitedHeap());
+            NbtIo.readAnyTag(input, NbtAccounter.create(2 * 1024 * 1024));
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
@@ -229,12 +203,6 @@ public class PolarReader {
         bb.skipBytes(length);
     }
 
-    /**
-     * Consumes the heightmap section without unpacking it, for readers that rebuild the heightmaps anyway.
-     * <p>
-     * Unpacking allocates an int per column of every stored heightmap, which is pure waste when the result
-     * is thrown away.
-     */
     protected static void skipHeightmaps(@NotNull ByteBuf bb) {
         int heightmapMask = bb.readInt();
         for (int i = 0; i < PolarChunk.MAX_HEIGHTMAPS; i++) {
@@ -268,7 +236,7 @@ public class PolarReader {
     }
 
     protected static @NotNull PolarSection readSection(@NotNull PolarDataConverter dataConverter, short version, int dataVersion, @NotNull ByteBuf bb) {
-        // If section is empty exit immediately
+
         if (bb.readByte() == 1) return new PolarSection();
 
         String[] blockPalette = getStringList(bb, MAX_BLOCK_PALETTE_SIZE);
@@ -278,7 +246,7 @@ public class PolarReader {
         if (version <= PolarWorld.VERSION_SHORT_GRASS) {
             for (int i = 0; i < blockPalette.length; i++) {
                 if (blockPalette[i].contains("grass")) {
-                    String strippedID = blockPalette[i].split("\\[")[0];
+                    String strippedID = stripBlockStateSuffix(blockPalette[i]);
                     int index = strippedID.indexOf(Key.DEFAULT_SEPARATOR);
                     if (strippedID.substring(index + 1).equals("grass")) {
                         blockPalette[i] = "short_grass";
@@ -297,7 +265,6 @@ public class PolarReader {
             biomeData = getLongArray(bb);
         }
 
-        // Uniform light is fully described by its LightContent, so only PRESENT sections carry an array around
         PolarSection.LightContent blockLightContent = readLightContent(version, bb);
         byte[] blockLight = blockLightContent == PolarSection.LightContent.PRESENT ? getLightData(bb) : null;
         PolarSection.LightContent skyLightContent = readLightContent(version, bb);
@@ -309,6 +276,11 @@ public class PolarReader {
                 blockLightContent, blockLight,
                 skyLightContent, skyLight
         );
+    }
+
+    private static String stripBlockStateSuffix(String blockId) {
+        int bracket = blockId.indexOf('[');
+        return bracket == -1 ? blockId : blockId.substring(0, bracket);
     }
 
     private static PolarSection.@NotNull LightContent readLightContent(short version, @NotNull ByteBuf bb) {
@@ -348,7 +320,7 @@ public class PolarReader {
         try (ByteBufInputStream bbis = new ByteBufInputStream(bb)) {
             nbt = new CompoundTag();
             if (bb.readByte() == 1) {
-                nbt = (CompoundTag) NbtIo.readAnyTag(bbis, NbtAccounter.unlimitedHeap());
+                nbt = (CompoundTag) NbtIo.readAnyTag(bbis, NbtAccounter.create(2 * 1024 * 1024));
                 fixSignNBT(nbt);
             }
         } catch (IOException e) {
@@ -386,9 +358,6 @@ public class PolarReader {
                 byte[] bytes = new byte[length];
                 buffer.readBytes(bytes);
 
-                // Every writer of this format compresses with a frame that records its own uncompressed size,
-                // so the length claimed by the header can be checked against the data before trusting it to
-                // size an array. Frames without one are only bounded by the cap.
                 long frameContentSize = Zstd.decompressedSize(bytes);
                 if (frameContentSize == 0) {
                     assertThat(compressedLength <= MAX_UNDECLARED_UNCOMPRESSED_BYTES,
@@ -404,7 +373,6 @@ public class PolarReader {
         };
     }
 
-
     @Contract("false, _ -> fail")
     private static void assertThat(boolean condition, @NotNull String message) {
         if (!condition) throw new IllegalArgumentException(message);
@@ -416,7 +384,5 @@ public class PolarReader {
             throw new IllegalArgumentException("Invalid chunk count: " + chunkCount);
         }
     }
-
-
 
 }

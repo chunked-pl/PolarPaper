@@ -52,11 +52,6 @@ public class CommandManager {
 
         register(new RelightCommand());
 
-//        register(new GCCommand());
-//        register(new SaveZSTDCommand());
-//        register(new SetRandomCommand());
-//        register(new FixSectionPaletteCommand());
-
         rootCmd
                 .then(Commands.literal("help")
                         .requires(source -> source.getSender().hasPermission("polarpaper.help"))
@@ -89,8 +84,6 @@ public class CommandManager {
             return;
         }
 
-        // Only claimed once the whole subcommand is known to be free, so a clashing alias cannot
-        // leave the command half registered
         for (String literal : literals) {
             registeredCommands.put(literal, polarCmd);
         }

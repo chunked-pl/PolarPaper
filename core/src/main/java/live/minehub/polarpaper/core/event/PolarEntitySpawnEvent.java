@@ -37,9 +37,6 @@ public class PolarEntitySpawnEvent extends Event implements Cancellable {
         return spawnLocation;
     }
 
-    /**
-     * @return true if entity is spawned as a result of pasting a schematic
-     */
     public boolean isFromSchematic() {
         return this.schematic;
     }
@@ -62,6 +59,5 @@ public class PolarEntitySpawnEvent extends Event implements Cancellable {
     public static HandlerList getHandlerList() {
         return HANDLER_LIST;
     }
-
 
 }

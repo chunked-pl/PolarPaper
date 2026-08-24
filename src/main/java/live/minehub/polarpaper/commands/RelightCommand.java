@@ -71,7 +71,7 @@ public class RelightCommand extends PolarCmd {
             relitChunks[0]++;
 
             if (lastSentMsg[0] > System.currentTimeMillis()) return;
-            lastSentMsg[0] = System.currentTimeMillis() + 500; // send message every 500ms
+            lastSentMsg[0] = System.currentTimeMillis() + 500;
 
             String percent = ONE_DECIMAL_PLACES.get().format((double)100.0F * (double)relitChunks[0] / (double)pending[0]);
             TextComponent.Builder message = Component.text().color(NamedTextColor.DARK_AQUA)

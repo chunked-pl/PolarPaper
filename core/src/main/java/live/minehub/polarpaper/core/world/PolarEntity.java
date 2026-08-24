@@ -26,16 +26,16 @@ public record PolarEntity(double x, double y, double z, float yaw, float pitch, 
         DataInputStream dataInput = new DataInputStream(inputStream);
         CompoundTag compound;
         try {
-            compound = NbtIo.read(dataInput, NbtAccounter.unlimitedHeap());
+            compound = NbtIo.read(dataInput, NbtAccounter.create(2 * 1024 * 1024));
         } catch (IOException _) {
-//                ExceptionUtil.log(e);
+
             return null;
         }
         Integer dataVersion = compound.getInt("DataVersion").orElse(null);
         if (dataVersion == null) return null;
         compound = PlatformHooks.get().convertNBT(References.ENTITY, MinecraftServer.getServer().getFixerUpper(), compound, dataVersion, SharedConstants.getCurrentVersion().dataVersion().version());
 
-        if (randomUUID) compound.remove("UUID"); // do not read UUID from bytes, instead use the default random uuid
+        if (randomUUID) compound.remove("UUID");
         ListTag posTag = new ListTag();
         posTag.add(DoubleTag.valueOf(spawnLocation.x()));
         posTag.add(DoubleTag.valueOf(spawnLocation.y()));
@@ -48,7 +48,6 @@ public record PolarEntity(double x, double y, double z, float yaw, float pitch, 
 
         String entityId = compound.getStringOr("id", "").replace("minecraft:", "");
 
-        // Rotate painting
         String paintingVariant = compound.getString("variant").orElse(null);
         if (entityId.equals("painting") && paintingVariant != null) {
             int facingIndex = facingIndex(spawnLocation.getYaw());
@@ -70,8 +69,6 @@ public record PolarEntity(double x, double y, double z, float yaw, float pitch, 
             compound.put("block_pos", blockPosTag);
         }
 
-        // Rotate item frame
-        // 3-south, 4-west, 2-north, 5-east, 1-top, and 0-bottom
         Integer facingValue = compound.getInt("Facing").orElse(null);
         if ((entityId.equals("item_frame") || entityId.equals("glow_item_frame")) && facingValue != null && facingValue != 1 && facingValue != 0) {
             int facingIndex = facingIndex(spawnLocation.getYaw());
@@ -89,14 +86,6 @@ public record PolarEntity(double x, double y, double z, float yaw, float pitch, 
         return nmsEntity;
     }
 
-    /**
-     * Which of the four horizontal directions a yaw points at, as an index into a south, west, north, east
-     * array.
-     * <p>
-     * Yaw is normalised first: the game keeps it in (-180, 180], and a raw remainder of a negative yaw is
-     * itself negative, which would index off the front of that array and take the whole world load down with
-     * it.
-     */
     private static int facingIndex(float yaw) {
         return Math.floorMod((int) Math.floor(yaw / 90), 4);
     }
@@ -106,7 +95,7 @@ public record PolarEntity(double x, double y, double z, float yaw, float pitch, 
     }
 
     public Location getLocation(World world, int chunkX, int chunkZ) {
-        // fix for previous version and also sanity check :)
+
         double realX = x;
         double realZ = z;
         if (x < 0) realX += 16;
@@ -114,6 +103,5 @@ public record PolarEntity(double x, double y, double z, float yaw, float pitch, 
 
         return new Location(world, realX + chunkX * 16, y, realZ + chunkZ * 16, yaw, pitch);
     }
-
 
 }

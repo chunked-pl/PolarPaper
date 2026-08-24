@@ -34,7 +34,7 @@ public class SetCenterCommand extends PolarCmd {
 
     protected static int convert(CommandContext<CommandSourceStack> ctx, Vector3i center) {
         CommandSender sender = ctx.getSource().getSender();
-        // Being ran from console
+
         if (!(sender instanceof Player player)) return Command.SINGLE_SUCCESS;
 
         World bukkitWorld = player.getWorld();
@@ -62,8 +62,6 @@ public class SetCenterCommand extends PolarCmd {
                 byte[] worldBytes = PolarWriter.write(newPolarWorld);
                 source.saveBytes(worldBytes);
 
-                // The world is still loaded, so without this the next autosave would write the file back out
-                // with whatever center it was loaded with
                 if (polarGenerator instanceof PolarStreamingGenerator streamingGenerator) {
                     streamingGenerator.setUserData(userData);
                 }
@@ -84,7 +82,7 @@ public class SetCenterCommand extends PolarCmd {
     @Override
     protected int executeDefault(CommandContext<CommandSourceStack> ctx) {
         CommandSender sender = ctx.getSource().getSender();
-        // Being ran from console
+
         if (!(sender instanceof Player player)) return Command.SINGLE_SUCCESS;
         Vector3i center = player.getLocation().toVector().toVector3i();
         return convert(ctx, center);

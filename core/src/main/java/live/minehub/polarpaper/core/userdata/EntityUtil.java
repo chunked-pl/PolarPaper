@@ -28,12 +28,8 @@ public class EntityUtil {
 
     }
 
-    /**
-     * Spawn an entity without reapplying Pos and Rot and causing issues with hanging entities
-     */
     public static boolean spawnEntity(Entity entity, World world) {
-        // entity.spawnAt will setPos again unnecessarily,
-        // so we rewrite the function here just without setPos and setRot
+
         ServerLevel level = ((CraftWorld) world).getHandle();
         net.minecraft.world.entity.Entity nmsEntity = ((CraftEntity) entity).getHandleRaw();
 

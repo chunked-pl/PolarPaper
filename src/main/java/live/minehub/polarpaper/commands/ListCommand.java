@@ -59,7 +59,7 @@ public class ListCommand extends PolarCmd {
             if (polarGenerator == null) color = NamedTextColor.GRAY;
 
             String worldName = world.getKey().toString()
-                    .replace(PolarPaper.getPlugin().namespace() + ":", ""); // don't show Polar's namespace
+                    .replace(PolarPaper.getPlugin().namespace() + ":", "");
             builder.appendNewline();
             builder.append(Component.text(" - ", NamedTextColor.WHITE));
             builder.append(Component.text(worldName, color));

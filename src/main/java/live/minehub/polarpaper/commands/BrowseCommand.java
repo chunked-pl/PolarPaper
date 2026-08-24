@@ -58,11 +58,11 @@ public class BrowseCommand extends PolarCmd {
         List<Path> paths;
         try (Stream<Path> list = Files.list(parent)) {
             paths = new ArrayList<>(list.sorted((a, b) -> {
-                // sort folders above, then sort alphabetically
+
                 boolean aFolder = Files.isDirectory(a);
                 boolean bFolder = Files.isDirectory(b);
                 if (aFolder == bFolder) {
-                    return a.compareTo(b); // sort alphabetically
+                    return a.compareTo(b);
                 }
                 if (aFolder) return -1;
                 return 1;
@@ -74,7 +74,6 @@ public class BrowseCommand extends PolarCmd {
         int totalPages = (int)Math.ceil((float)paths.size() / ITEMS_PER_PAGE);
         if (page > totalPages) page = Math.max(totalPages, 1);
 
-        // Header
         builder.append(Component.text("Browsing '", NamedTextColor.GRAY));
         boolean first = true;
         for (Path path : worldsFolder.getParent().relativize(parent)) {
@@ -98,12 +97,12 @@ public class BrowseCommand extends PolarCmd {
             boolean folder = Files.isDirectory(path);
             if (!folder && !path.getFileName().toString().endsWith(".polar")) continue;
 
-            String fileName = path.getFileName().toString().replaceAll(".polar$", ""); // $ means last occurrence
+            String fileName = path.getFileName().toString().replaceAll(".polar$", "");
 
             if (folder) {
                 builder.append(Component.text()
                         .appendNewline()
-                        .append(Component.text(" \uD83D\uDDBF ", NamedTextColor.YELLOW)) // folder icon
+                        .append(Component.text(" \uD83D\uDDBF ", NamedTextColor.YELLOW))
                         .append(Component.text(fileName, NamedTextColor.YELLOW))
                         .clickEvent(ClickEvent.runCommand("/polar browse 1 " + worldsFolder.relativize(path))));
                 continue;
@@ -150,8 +149,8 @@ public class BrowseCommand extends PolarCmd {
 
         if (!isConsole) {
             int usedLines = pagedPaths.size();
-            if (usedLines == 0) usedLines = 2; // account for empty folder text
-            for (int i = 0; i < ITEMS_PER_PAGE - usedLines; i++) { // padding
+            if (usedLines == 0) usedLines = 2;
+            for (int i = 0; i < ITEMS_PER_PAGE - usedLines; i++) {
                 builder.appendNewline();
             }
 

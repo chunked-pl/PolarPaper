@@ -77,7 +77,7 @@ public class PolarWriter {
         out.writeShort(PolarWorld.LATEST_VERSION);
         writeVarInt(dataConverter.dataVersion(), out);
         out.writeByte(world.compression().ordinal());
-        writeVarInt(contentBytes.length, out); // uncompressed length
+        writeVarInt(contentBytes.length, out);
         out.writeBytes(payload);
 
         return ByteArrayUtil.outputArray(out);
@@ -142,7 +142,6 @@ public class PolarWriter {
         bb.writeByte(empty ? 1 : 0);
         if (empty) return;
 
-        // Blocks
         var blockPalette = section.blockPalette();
         writeStringArray(blockPalette, bb);
         if (blockPalette.length > 1) {
@@ -150,7 +149,6 @@ public class PolarWriter {
             writeLongArray(blockData, bb);
         }
 
-        // Biomes
         var biomePalette = section.biomePalette();
         writeStringArray(biomePalette, bb);
         if (biomePalette.length > 1) {
@@ -158,7 +156,6 @@ public class PolarWriter {
             writeLongArray(biomeData, bb);
         }
 
-        // Light
         bb.writeByte((byte) section.blockLightContent().ordinal());
         if (section.blockLightContent() == PolarSection.LightContent.PRESENT)
             bb.writeBytes(section.blockLight());

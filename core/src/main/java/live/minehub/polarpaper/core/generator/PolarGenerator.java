@@ -53,32 +53,18 @@ public abstract class PolarGenerator extends ChunkGenerator {
         return this.worldAccess;
     }
 
-    /**
-     * The chunks of this world that were not made live, kept so that saving does not lose them.
-     * <p>
-     * Empty for a world that loaded all of its chunks, which is how a world behaves unless it was created
-     * with a {@link ChunkResidencyPolicy} that leaves some out.
-     */
     public @NotNull PolarChunkArchive getChunkArchive() {
         return this.chunkArchive;
     }
 
-    /**
-     * Records that the chunk standing at a position is a stand in rather than what the world holds there.
-     * <p>
-     * Saving has to leave these out and write the archived chunk instead, or the world would be saved with
-     * whatever was put there to look at, in place of what is actually there.
-     */
     public void markPlaceholderChunk(int chunkX, int chunkZ) {
         this.placeholderChunks.add(CoordConversion.chunkIndex(chunkX, chunkZ));
     }
 
-    /** Records that a position now holds its real chunk. */
     public void clearPlaceholderChunk(int chunkX, int chunkZ) {
         this.placeholderChunks.remove(CoordConversion.chunkIndex(chunkX, chunkZ));
     }
 
-    /** The positions whose live chunk must not be saved, as chunk indexes. */
     public @NotNull @Unmodifiable Set<Long> getPlaceholderChunks() {
         return Set.copyOf(this.placeholderChunks);
     }
@@ -88,12 +74,6 @@ public abstract class PolarGenerator extends ChunkGenerator {
         return BlockSelector.horizontalCircle(spawn.getBlockX(), spawn.getBlockZ(), config.worldRadiusBlocks());
     }
 
-    /**
-     * The world level user data this world was loaded with, such as the schematic center.
-     * <p>
-     * Saving rebuilds the world from the chunks that are loaded, which knows nothing about this, so it has to
-     * be carried across from here or every save would quietly drop it.
-     */
     public byte @NotNull [] getUserData() {
         PolarWorld polarWorld = getPolarWorld();
         return polarWorld == null ? new byte[0] : polarWorld.userData();
@@ -105,7 +85,7 @@ public abstract class PolarGenerator extends ChunkGenerator {
 
     @Override
     public @Nullable Location getFixedSpawnLocation(@NotNull World world, @NotNull Random random) {
-        // Copied so that callers cannot move the spawn stored in the config by mutating what they are given
+
         Location spawn = getConfig().spawn().clone();
         spawn.setWorld(world);
         return spawn;

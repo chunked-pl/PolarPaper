@@ -51,20 +51,17 @@ public class NoSaveLevelCreatorImpl implements NoSaveLevelCreator {
     public CompletableFuture<@Nullable World> createLevel(Plugin plugin, WorldCreator creator, Location spawnPos, Difficulty difficulty, Map<String, Object> gamerules, long time) {
         CraftServer craftServer = (CraftServer) Bukkit.getServer();
 
-        // Check if already existing
         if (craftServer.getWorld(creator.key()) != null) {
             return CompletableFuture.completedFuture(null);
         }
 
         Preconditions.checkState(craftServer.getServer().getAllLevels().iterator().hasNext(), "Cannot create additional worlds on STARTUP");
-        //Preconditions.checkState(!this.console.isIteratingOverLevels, "Cannot create a world while worlds are being ticked"); // Paper - Cat - Temp disable. We'll see how this goes.
 
         String name = creator.name();
         ChunkGenerator chunkGenerator = creator.generator();
         BiomeProvider biomeProvider = creator.biomeProvider();
         World world = craftServer.getWorld(name);
 
-        // Paper start
         World worldByKey = craftServer.getWorld(creator.key());
         if (world != null || worldByKey != null) {
             if (world == worldByKey) {
@@ -106,7 +103,6 @@ public class NoSaveLevelCreatorImpl implements NoSaveLevelCreator {
 
         WorldOptions worldOptions = new WorldOptions(creator.seed(), creator.generateStructures(), creator.bonusChest());
 
-        // fix for log "No key layers in MapLike[{}]"
         JsonObject defaultGenSettings = new JsonObject();
         defaultGenSettings.add("layers", new JsonArray());
         defaultGenSettings.add("biome", new JsonPrimitive("minecraft:plains"));
@@ -121,7 +117,7 @@ public class NoSaveLevelCreatorImpl implements NoSaveLevelCreator {
         net.minecraft.world.Difficulty minecraftDifficulty;
         try {
             minecraftDifficulty = net.minecraft.world.Difficulty.valueOf(difficulty.name());
-        } catch (IllegalArgumentException _) { // This error should never happen
+        } catch (IllegalArgumentException _) {
             minecraftDifficulty = net.minecraft.world.Difficulty.NORMAL;
         }
 
@@ -143,7 +139,7 @@ public class NoSaveLevelCreatorImpl implements NoSaveLevelCreator {
         for (Map.Entry<String, Object> entry : gamerules.entrySet()) {
             NamespacedKey key = NamespacedKey.fromString(entry.getKey());
             if (key == null) {
-                if (Config.getDefaultGamerules().containsKey(entry.getKey())) continue; // is a custom gamerule, ignore
+                if (Config.getDefaultGamerules().containsKey(entry.getKey())) continue;
                 LOGGER.warn("Invalid gamerule: {}", entry.getKey());
                 continue;
             }
@@ -156,7 +152,6 @@ public class NoSaveLevelCreatorImpl implements NoSaveLevelCreator {
 
             nmsGameRules.set(nmsRule, entry.getValue(), null);
         }
-
 
         long biomeZoomSeed = BiomeManager.obfuscateSeed(worldGenSettings.options().seed());
         LevelStem customStem = worldGenSettings.dimensions().get(actualDimension).orElse(null);
@@ -202,9 +197,8 @@ public class NoSaveLevelCreatorImpl implements NoSaveLevelCreator {
                 serverLevel.clockManager().setTotalTicks(clock, time);
             });
 
-            craftServer.getServer().addLevel(serverLevel); // Paper - Put world into worldlist before initing the world; move up
+            craftServer.getServer().addLevel(serverLevel);
             craftServer.getServer().initWorld(serverLevel, null);
-            // Paper - Put world into worldlist before initing the world; move up
 
             craftServer.getServer().prepareLevel(serverLevel);
 

@@ -43,7 +43,6 @@ public class CreateBlankCommand extends PolarCmd {
             return Command.SINGLE_SUCCESS;
         }
 
-        // The name becomes a file name in the worlds folder, so it must not be able to point outside it
         if (WorldKey.validatePath(ctx.getSource().getSender(), worldName) == null) return Command.SINGLE_SUCCESS;
 
         FileConfiguration fileConfig = PolarPaper.getPlugin().getConfig();
@@ -57,7 +56,7 @@ public class CreateBlankCommand extends PolarCmd {
             }
 
             PolarGenerator generator = PolarGenerator.fromWorld(world);
-            if (generator != null) generator.setSource(Polar.getDefaultFolderSource(worldName)); // change source to the path so it can be saved/autosaved properly
+            if (generator != null) generator.setSource(Polar.getDefaultFolderSource(worldName));
 
             ctx.getSource().getSender().sendMessage(
                     Component.text()

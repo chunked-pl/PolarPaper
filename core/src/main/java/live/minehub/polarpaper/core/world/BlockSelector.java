@@ -27,7 +27,7 @@ public interface BlockSelector {
 
         @Override
         public void forEachChunk(Consumer<Vector2i> chunkConsumer) {
-            // ALL block selector cannot loop through every chunk
+
         }
     };
 
@@ -56,7 +56,7 @@ public interface BlockSelector {
 
             @Override
             public boolean containsEntireSection(int chunkX, int chunkZ, int sectionY) {
-                return true; // selects whole chunks, never individual blocks
+                return true;
             }
 
             @Override
@@ -94,7 +94,7 @@ public interface BlockSelector {
 
             @Override
             public boolean testChunk(int x, int z) {
-                // Chebyshev distance
+
                 long dx = Math.abs(x - centerX);
                 long dz = Math.abs(z - centerZ);
                 return Math.max(dx, dz) <= radius;
@@ -102,7 +102,7 @@ public interface BlockSelector {
 
             @Override
             public boolean containsEntireSection(int chunkX, int chunkZ, int sectionY) {
-                return true; // selects whole chunks, never individual blocks
+                return true;
             }
 
             @Override
@@ -122,12 +122,6 @@ public interface BlockSelector {
         };
     }
 
-    /**
-     * Selects blocks inside a horizontal circle measured in block coordinates.
-     * <p>
-     * Unlike {@link #circle(int, int, int)}, whose coordinates and radius are expressed in chunks for legacy
-     * conversion commands, this selector masks individual blocks in chunks crossing the circle's edge.
-     */
     static @NotNull BlockSelector horizontalCircle(int centerBlockX, int centerBlockZ, int radiusBlocks) {
         if (radiusBlocks < 0) throw new IllegalArgumentException("Radius cannot be negative: " + radiusBlocks);
 
@@ -176,9 +170,6 @@ public interface BlockSelector {
         };
     }
 
-    /**
-     * Selects only positions accepted by both selectors.
-     */
     static @NotNull BlockSelector intersection(@NotNull BlockSelector first, @NotNull BlockSelector second) {
         if (first == ALL) return second;
         if (second == ALL) return first;
@@ -233,19 +224,10 @@ public interface BlockSelector {
         return true;
     }
 
-    /**
-     * Whether every block of a section is selected, letting callers skip testing its 4096 blocks one by one.
-     * <p>
-     * Only an optimisation: returning false is always correct, it just costs a test per block.
-     */
     default boolean containsEntireSection(int chunkX, int chunkZ, int sectionY) {
         return false;
     }
 
-    /**
-     * Loop through every chunk that this block selector contains. Does not return anything with ALL block selector.
-     * Used to add additional chunks to consider while saving the world.
-     */
     void forEachChunk(Consumer<Vector2i> chunkConsumer);
 
     record RegionBlockSelector(Vector3i min, Vector3i max) implements BlockSelector {

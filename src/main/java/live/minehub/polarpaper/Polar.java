@@ -48,7 +48,6 @@ public class Polar {
     private static final Set<NamespacedKey> LOADING_WORLDS = new CopyOnWriteArraySet<>();
     private static final Map<NamespacedKey, BukkitTask> AUTOSAVE_TASK_MAP = new ConcurrentHashMap<>();
 
-    /** The config file as it should next be written, or null once whoever is writing has taken it. */
     private static final AtomicReference<String> PENDING_CONFIG = new AtomicReference<>();
     private static final AtomicBoolean CONFIG_WRITE_SCHEDULED = new AtomicBoolean();
     private static final Object CONFIG_WRITE_LOCK = new Object();
@@ -76,106 +75,38 @@ public class Polar {
         }
     }
 
-    /**
-     * Load a polar world using the source defined in the config
-     *
-     * @param worldName The name of the world to load
-     * @return CompletableFuture with the created bukkit world (completes immediately if not async)
-     * @see Polar#getDefaultFolderSource(String)
-     */
     public static CompletableFuture<@Nullable World> createWorld(@Nullable PolarSource source, @NotNull String worldName) {
         return createWorld(source, worldName, VersionUtil.getPolarFeaturesWorldAccess());
     }
 
-    /**
-     * Load a polar world with config read from config.yml and with the default PolarWorldAccess
-     *
-     * @param worldName The name for the polar world
-     * @return CompletableFuture with the created bukkit world (completes immediately if not async)
-     */
     public static CompletableFuture<@Nullable World> createWorld(PolarWorld polarWorld, @NotNull String worldName) {
         return createWorld(polarWorld, worldName, VersionUtil.getPolarFeaturesWorldAccess());
     }
 
-    /**
-     * Load a polar world with config read from config.yml
-     *
-     * @param polarSource The source to load the polar world from
-     * @param worldName The name for the polar world
-     * @param worldAccess Describes how userdata should be handled (default PolarWorldAccess.POLAR_PAPER_FEATURES)
-     * @return CompletableFuture with the created bukkit world (completes immediately if not async)
-     * @see Polar#getDefaultFolderSource(String)
-     * @see BytesPolarSource
-     * @see EntitiesWorldAccess
-     */
     public static CompletableFuture<@Nullable World> createWorld(@Nullable PolarSource polarSource, @NotNull String worldName, @NotNull PolarWorldAccess worldAccess) {
         FileConfiguration fileConfig = PolarPaper.getPlugin().getConfig();
-        Config config = Config.readFromConfig(fileConfig, worldName); // If world not in config, use defaults
+        Config config = Config.readFromConfig(fileConfig, worldName);
         return createWorld(polarSource, worldName, config, worldAccess);
     }
 
-    /**
-     * Creates a polar world with config read from config.yml
-     *
-     * @param worldName The name for the polar world
-     * @param worldAccess Describes how userdata should be handled (default PolarWorldAccess.POLAR_PAPER_FEATURES)
-     * @return CompletableFuture with the created bukkit world (completes immediately if not async)
-     * @see EntitiesWorldAccess
-     */
     public static CompletableFuture<@Nullable World> createWorld(@NotNull PolarWorld polarWorld, @NotNull String worldName, @NotNull PolarWorldAccess worldAccess) {
         FileConfiguration fileConfig = PolarPaper.getPlugin().getConfig();
-        Config config = Config.readFromConfig(fileConfig, worldName); // If world not in config, use defaults
+        Config config = Config.readFromConfig(fileConfig, worldName);
         return createWorld(polarWorld, worldName, config, worldAccess);
     }
 
-    /**
-     * Creates a polar world with the default PolarWorldAccess
-     *
-     * @param polarSource The source to load the polar world from
-     * @param worldName The name for the polar world
-     * @param config Custom config for the polar world
-     * @return CompletableFuture with the created bukkit world (completes immediately if not async)
-     * @see Polar#getDefaultFolderSource(String)
-     * @see BytesPolarSource
-     */
     public static CompletableFuture<@Nullable World> createWorld(@Nullable PolarSource polarSource, @NotNull String worldName, @NotNull Config config) {
         return createWorld(polarSource, worldName, config, VersionUtil.getPolarFeaturesWorldAccess());
     }
 
-    /**
-     * Creates a polar world with the default PolarWorldAccess
-     *
-     * @param worldName The name for the polar world
-     * @param config Custom config for the polar world
-     * @return CompletableFuture with the created bukkit world (completes immediately if not async)
-     */
     public static CompletableFuture<@Nullable World> createWorld(@NotNull PolarWorld polarWorld, @NotNull String worldName, @NotNull Config config) {
         return createWorld(polarWorld, worldName, config, VersionUtil.getPolarFeaturesWorldAccess());
     }
 
-    /**
-     * Creates a polar world
-     *
-     * @param source The source to load the polar world from
-     * @param worldName The name for the polar world
-     * @param config Custom config for the polar world
-     * @return CompletableFuture with the created bukkit world (completes immediately if not async)
-     * @see Polar#getDefaultFolderSource(String)
-     * @see BytesPolarSource
-     */
     public static CompletableFuture<@Nullable World> createWorld(@Nullable PolarSource source, @NotNull String worldName, @NotNull Config config, @NotNull PolarWorldAccess worldAccess) {
         return createWorld(source, worldName, config, worldAccess, ChunkResidencyPolicy.LOAD_EVERYTHING);
     }
 
-    /**
-     * Creates a polar world in which only the chunks {@code residency} asks for are live.
-     * <p>
-     * The rest are still part of the world and are still saved, but they stay compressed in the generator's
-     * {@link PolarChunkArchive} until {@link #loadChunk} is called for them. A world used this way costs
-     * memory in proportion to the part of it that is in use rather than to its size on disk.
-     *
-     * @see #loadChunk(World, int, int)
-     */
     public static CompletableFuture<@Nullable World> createWorld(@Nullable PolarSource source, @NotNull String worldName,
                                                                  @NotNull Config config, @NotNull PolarWorldAccess worldAccess,
                                                                  @NotNull ChunkResidencyPolicy residency) {
@@ -184,9 +115,6 @@ public class Polar {
         return createWorld(generator, worldName).thenComposeAsync(world -> {
             if (world == null) return CompletableFuture.completedFuture(null);
 
-            // The file is read here rather than before the world is created, because this stage already runs
-            // off the caller's thread and the caller is usually the server's main one. A failed read unloads
-            // the empty world the same way a failed stream does.
             CompletableFuture<Void> streamed;
             try {
                 byte[] worldBytes = source == null ? null : source.readBytes();
@@ -205,13 +133,6 @@ public class Polar {
         });
     }
 
-    /**
-     * Creates a polar world
-     *
-     * @param worldName The name for the polar world
-     * @param config Custom config for the polar world
-     * @return CompletableFuture with the created bukkit world (completes immediately if not async)
-     */
     public static CompletableFuture<@Nullable World> createWorld(@NotNull PolarWorld polarWorld, @NotNull String worldName, @NotNull Config config, @NotNull PolarWorldAccess worldAccess) {
         PolarStreamingGenerator generator = new PolarStreamingGenerator(config, null, worldAccess);
         generator.setUserData(polarWorld.userData());
@@ -268,25 +189,12 @@ public class Polar {
         });
     }
 
-    /**
-     * Drops the positions whose live chunk is only a stand in, so that the archived chunk is written for them
-     * instead. Without this a world would be saved showing whatever was put there to look at, in place of
-     * what it actually holds.
-     */
     private static void dropPlaceholderChunks(@NotNull PolarWorld polarWorld, @NotNull PolarGenerator generator) {
         for (long chunkIndex : generator.getPlaceholderChunks()) {
             polarWorld.removeChunkAt(CoordConversion.chunkX(chunkIndex), CoordConversion.chunkZ(chunkIndex));
         }
     }
 
-    /**
-     * Makes a chunk that was kept aside at load time live in the world.
-     * <p>
-     * Does nothing and reports false for a chunk that is already live, or that this world does not hold. Safe
-     * to call from any thread; the chunk becomes visible on the world's own thread.
-     *
-     * @see #createWorld(PolarSource, String, Config, PolarWorldAccess, ChunkResidencyPolicy)
-     */
     @SuppressWarnings("UnusedReturnValue")
     public static CompletableFuture<Boolean> loadChunk(@NotNull World world, int chunkX, int chunkZ) {
         PolarStreamingGenerator generator = streamingGeneratorOf(world);
@@ -298,13 +206,6 @@ public class Polar {
         BlockSelector blockSelector = generator.getWorldBlockSelector();
         int sectionCount = level.getSectionsCount();
 
-        // Claiming reads the chunk out of the world's file, and expanding it means decompressing it, parsing
-        // two dozen sections, building their palettes and lighting them. None of that touches the live world,
-        // and doing any of it on the caller's thread would stall the server for as long as it takes, once per
-        // chunk, right as a player buys one.
-        // The position stays archived until the chunk is live. Expanding takes long enough that a save can
-        // start in the middle, and a position that had already left the archive but was not live yet would be
-        // written to neither half of the file: the chunk would come back as air.
         return CompletableFuture
                 .supplyAsync(() -> {
                     byte[] body = generator.getChunkArchive().claim(chunkX, chunkZ);
@@ -325,7 +226,7 @@ public class Polar {
                         : TaskFutures.runSync(PolarPaper.getPlugin(), () -> {
                     LevelChunk existing = liveChunkAt(level, chunkX, chunkZ);
                     if (existing != null) {
-                        // Already standing there as an empty placeholder, so only its blocks change
+
                         PolarStreamLoader.replaceChunkBlocks(level, world, existing, prepared.levelChunk(),
                                 prepared.chunk(), generator.getWorldAccess(), blockSelector);
                         retainChunk(world, chunkX, chunkZ);
@@ -342,7 +243,7 @@ public class Polar {
                     if (!PolarStreamLoader.insertChunk(level, prepared.levelChunk())) {
                         LOGGER.warn("Could not expand the archived chunk at {} {} in {}, the chunk system already holds that position",
                                 chunkX, chunkZ, world.getKey());
-                        // Left in the archive so that a later call can expand it once the position is free
+
                         generator.getChunkArchive().abandon(chunkX, chunkZ);
                         return false;
                     }
@@ -357,28 +258,11 @@ public class Polar {
                 });
     }
 
-    /**
-     * Whether the position still has a real chunk waiting in the archive for {@link #loadChunk} to expand.
-     * <p>
-     * A caller that charges a player for a chunk needs to know this before it takes anything: a position
-     * that was never written to the polar file expands into air, and the player would pay for nothing.
-     *
-     * @return whether the archive holds a chunk for this position
-     */
     public static boolean isChunkArchived(@NotNull World world, int chunkX, int chunkZ) {
         PolarStreamingGenerator generator = streamingGeneratorOf(world);
         return generator != null && generator.getChunkArchive().contains(chunkX, chunkZ);
     }
 
-    /**
-     * Puts an empty chunk at a position whose real contents are not meant to be seen yet.
-     * <p>
-     * The world needs a chunk to be there for light to behave along its edge, but nothing says it has to be
-     * the chunk the file holds. This gives the position a chunk made of air; the real one stays archived
-     * until {@link #loadChunk} replaces this one with it. Does nothing if a chunk is already there.
-     *
-     * @return whether an empty chunk was put there
-     */
     @SuppressWarnings("UnusedReturnValue")
     public static CompletableFuture<Boolean> loadEmptyChunk(@NotNull World world, int chunkX, int chunkZ) {
         PolarStreamingGenerator generator = streamingGeneratorOf(world);
@@ -396,19 +280,15 @@ public class Polar {
                     if (liveChunkAt(level, chunkX, chunkZ) != null) return false;
 
                     levelChunk.tryMarkSaved();
-                    // A position the chunk system claimed while this was being prepared ends up holding a
-                    // generated chunk, which in a polar world is air: the same thing this puts there. The
-                    // stand in stands either way, so the position is marked either way.
+
                     PolarStreamLoader.insertChunk(level, levelChunk);
                     retainChunk(world, chunkX, chunkZ);
-                    // Saving must write the archived chunk for this position, not the empty one now standing
-                    // there to be looked at
+
                     generator.markPlaceholderChunk(chunkX, chunkZ);
                     return true;
                 }));
     }
 
-    /** The positions a converted world writes on its own, so the archive knows what it need not keep. */
     private static @NotNull java.util.Set<Long> positionsOf(@NotNull PolarWorld polarWorld) {
         java.util.Set<Long> positions = new java.util.HashSet<>();
         for (PolarChunk chunk : polarWorld.chunks()) {
@@ -431,22 +311,14 @@ public class Polar {
         PolarStreamLoader.retainChunk(PolarPaper.getPlugin(), world, chunkX, chunkZ);
     }
 
-    /** A chunk built off the main thread, waiting to be put into the world on it. */
     private record PreparedChunk(PolarChunk chunk, NoUnloadLevelChunk levelChunk) {
     }
 
-    /**
-     * Marks a newly created world as ready to be saved and starts autosaving it.
-     */
     private static void finishLoading(@NotNull World world, @NotNull Config config) {
         setLoading(world.getKey(), false);
         startAutoSaveTask(world, config);
     }
 
-    /**
-     * A partially streamed world is not safe to use. All chunk tasks have settled before this is called, so it
-     * can be unloaded without racing tasks that still hold its level and chunks.
-     */
     private static CompletableFuture<@Nullable World> finishOrAbortLoading(@NotNull World world, @NotNull Config config,
                                                                            @NotNull String worldName, @Nullable Throwable failure) {
         if (failure == null) {
@@ -469,15 +341,6 @@ public class Polar {
                 });
     }
 
-    /**
-     * Creates a polar world
-     *
-     * @param generator Generator for the world
-     * @param worldName The name for the polar world
-     * @return CompletableFuture with the created bukkit world (completes immediately if not async)
-     * @see EntitiesWorldAccess
-     * @see PolarStreamingGenerator
-     */
     public static CompletableFuture<@Nullable World> createWorld(@NotNull PolarGenerator generator, @NotNull String worldName) {
         worldName = worldName.toLowerCase().replace(" ", "_");
 
@@ -502,7 +365,7 @@ public class Polar {
         return VersionUtil.createNoSaveLevel(worldCreator, config.spawn(), config.difficulty(), config.gamerules(), config.time())
                 .whenComplete((world, ex) -> {
                     if (ex != null || world == null) {
-                        // createNoSaveLevel marks the world as loading before it starts, so clear that again
+
                         setLoading(worldKey, false);
                         if (ex == null) {
                             LOGGER.error("An error occurred loading polar world '" + worldKey.getKey() + "', skipping.");
@@ -512,15 +375,12 @@ public class Polar {
                         return;
                     }
 
-                    // Since saving is disabled in the level anyway, setAutoSave is now essentially setting whether
-                    // chunks should be allowed to unload and be removed from memory
                     world.setAutoSave(false);
                 });
     }
 
     public static void stopAutoSaveTask(NamespacedKey worldKey) {
-        // Removed as well as cancelled: the task holds on to the world, which would otherwise stay in memory
-        // for as long as the server runs after being unloaded
+
         BukkitTask prevTask = AUTOSAVE_TASK_MAP.remove(worldKey);
         if (prevTask != null) prevTask.cancel();
     }
@@ -556,13 +416,12 @@ public class Polar {
             }
 
             try {
-                updateConfig(world, world.getKey().getKey()); // config should only be updated synchronously
+                updateConfig(world, world.getKey().getKey());
                 saveWorld(world)
                         .whenComplete((_, e) -> {
                             saveInProgress.set(false);
                             if (e != null) {
-                                // Nothing has been written: a save that cannot be completed in full leaves the
-                                // previous file alone rather than replacing a whole world with part of one
+
                                 String errorMsg = String.format(
                                         "Failed to save '%s', its previous file is untouched. Please check logs for error",
                                         world.getKey().getKey());
@@ -596,28 +455,16 @@ public class Polar {
         world.setGameRule((GameRule<T>) rule, (T)value);
     }
 
-    /**
-     * Writes this world's properties to config (e.g. gamerules)
-     * <p>
-     * Must be called synchronously, as it reads the world's live state. Everything that touches the disk is
-     * kept off the calling thread, because this runs on every autosave of every world.
-     */
     public static Config updateConfig(World world, String worldName) {
         FileConfiguration fileConfig = PolarPaper.getPlugin().getConfig();
         Config defaultConfig = Config.getDefaultConfig(fileConfig);
 
-        // Read from the config the plugin already holds rather than from the file. This used to reload the
-        // file first, which parsed the whole of it on the main thread on every autosave, and the only thing
-        // that gained was picking up hand written edits, which is what /polar reloadconfig is for.
-        Config storedConfig = Config.readFromConfig(fileConfig, worldName, defaultConfig.toBuilder()); // If world not in config, use defaults
+        Config storedConfig = Config.readFromConfig(fileConfig, worldName, defaultConfig.toBuilder());
         Config newConfig = storedConfig.toBuilder().fromWorld(world).build();
 
         PolarGenerator generator = PolarGenerator.fromWorld(world);
         if (generator != null) generator.setConfig(newConfig);
 
-        // An autosave almost never changes a world's settings, and rewriting the file to say exactly what it
-        // already says is the whole cost of this method. A world that has no entry yet is always written, so
-        // that it appears in the file even when every one of its settings is the default one.
         if (Config.isInConfig(fileConfig, worldName) && newConfig.equals(storedConfig)) return newConfig;
 
         Config.applyToConfig(fileConfig, worldName, newConfig);
@@ -626,13 +473,6 @@ public class Polar {
         return newConfig;
     }
 
-    /**
-     * Writes config.yml, off the calling thread while the server is running.
-     * <p>
-     * Each of these is the whole file, so a newer one supersedes anything still waiting and only the latest
-     * has to reach the disk. While the plugin is disabling nothing else will get to run, so it is written
-     * there and then instead.
-     */
     private static void saveConfigFile(String contents) {
         PENDING_CONFIG.set(contents);
 
@@ -648,26 +488,18 @@ public class Polar {
                 writePendingConfig();
             });
         } catch (Throwable throwable) {
-            // The plugin stopped being able to schedule between the check above and here, so it is this
-            // thread's job after all. Losing the write would lose the world's settings.
+
             CONFIG_WRITE_SCHEDULED.set(false);
             writePendingConfig();
         }
     }
 
-    /**
-     * Writes the config file straight away if a write is still waiting to happen.
-     * <p>
-     * Meant for shutdown: the scheduler drops queued asynchronous tasks when the plugin stops, so a write
-     * that an autosave lined up moments earlier would otherwise never reach the disk.
-     */
     public static void flushPendingConfig() {
         writePendingConfig();
     }
 
     private static void writePendingConfig() {
-        // Taken under the lock so that two writers can never hold two different versions at once and race to
-        // put the older one down last
+
         synchronized (CONFIG_WRITE_LOCK) {
             String contents = PENDING_CONFIG.getAndSet(null);
             if (contents == null) return;
@@ -680,10 +512,6 @@ public class Polar {
         }
     }
 
-    /**
-     * Replaces a file in one step, so that a server dying mid-write cannot leave behind half a config file
-     * for every world to then load its settings from.
-     */
     private static void writeAtomically(Path path, String contents) throws IOException {
         Path parent = path.toAbsolutePath().getParent();
         if (parent == null) throw new IOException("Config file must have a parent directory: " + path);
@@ -704,9 +532,6 @@ public class Polar {
         }
     }
 
-    /**
-     * Reads the config for the world and updates the world's properties (e.g. gamerules)
-     */
     public static void reloadConfig(World world) {
         PolarPaper.getPlugin().reloadConfig();
 
@@ -736,14 +561,6 @@ public class Polar {
         Polar.startAutoSaveTask(world, config);
     }
 
-    /**
-     * Saves a polar world asynchronously using the source used to load it
-     * <br>
-     * Will not save if a source was not used to load the world
-     *
-     * @param world The bukkit world (needs to be a polar world)
-     * @see PolarGenerator#getSource()
-     */
     public static CompletableFuture<Void> saveWorld(World world) {
         PolarGenerator generator = PolarGenerator.fromWorld(world);
         if (generator == null) return CompletableFuture.completedFuture(null);
@@ -752,14 +569,6 @@ public class Polar {
         return saveWorld(world, source);
     }
 
-    /**
-     * Saves a polar world asynchronously using the given source
-     *
-     * @param world The bukkit world (needs to be a polar world)
-     * @param polarSource The source to use to save the polar world
-     * @see Polar#getDefaultFolderSource(String)
-     * @see BytesPolarSource
-     */
     @SuppressWarnings("unused")
     public static CompletableFuture<Void> saveWorld(World world, PolarSource polarSource) {
         PolarGenerator generator = PolarGenerator.fromWorld(world);
@@ -768,10 +577,6 @@ public class Polar {
         return saveWorld(world, extraChunks, polarSource, generator.getWorldAccess(), BlockSelector.ALL, generator.getConfig());
     }
 
-    /**
-     * Saves on the current Paper main thread. Intended only for plugin shutdown, when scheduling a continuation
-     * back to that same thread and waiting for it would deadlock.
-     */
     public static void saveWorldSynchronously(World world) throws Exception {
         PolarGenerator generator = PolarGenerator.fromWorld(world);
         if (generator == null || generator.getSource() == null) return;
@@ -796,20 +601,6 @@ public class Polar {
         generator.getChunkArchive().bindSource(source);
     }
 
-    /**
-     * Updates and saves a polar world asynchronously using the given source
-     * <br>
-     * The future is completed exceptionally if saving failed
-     *
-     * @param world The bukkit world to retrieve new chunks from
-     * @param extraChunks Extra chunks to include in the saved file
-     * @param polarSource The source to use to save the polar world
-     * @param polarWorldAccess Describes how userdata should be handled (default PolarWorldAccess.POLAR_PAPER_FEATURES)
-     * @param blockSelector Used to filter which blocks should be updated (essentially a crop)
-     * @param config Custom config for the polar world
-     * @see EntitiesWorldAccess
-     * @see BlockSelector#ALL
-     */
     public static CompletableFuture<Void> saveWorld(World world, Collection<PolarChunk> extraChunks, PolarSource polarSource, PolarWorldAccess polarWorldAccess, BlockSelector blockSelector, Config config) {
         if (Polar.isLoading(world.getKey())) return CompletableFuture.failedFuture(new IllegalStateException(world.getKey() + " is still loading"));
 
@@ -817,11 +608,6 @@ public class Polar {
                 config.spawn().getBlockX(), config.spawn().getBlockZ(), config.worldRadiusBlocks());
         BlockSelector boundedSelector = BlockSelector.intersection(blockSelector, radiusSelector);
 
-        // Converting only looks at the chunks that are live, so the world level user data and the chunks that
-        // were never made live both have to be carried across by hand.
-        // The archive is snapshotted first, before a single live chunk is collected: a chunk made live in
-        // between then appears in both halves and the writer keeps the live one, where the other order would
-        // drop it from both and lose it from the file.
         PolarGenerator generator = PolarGenerator.fromWorld(world);
         byte[] worldUserData = generator == null ? new byte[0] : generator.getUserData();
         PolarChunkArchive.Snapshot archiveSnapshot = generator == null

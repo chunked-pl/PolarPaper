@@ -26,7 +26,7 @@ import org.bukkit.util.Vector;
 public class PolarListener implements Listener {
 
     @EventHandler(ignoreCancelled = true)
-    public void onBlockFade(BlockFadeEvent event) { // coral death
+    public void onBlockFade(BlockFadeEvent event) {
         PolarGenerator generator = PolarGenerator.fromWorld(event.getBlock().getWorld());
         if (generator == null) return;
         Config config = generator.getConfig();
@@ -36,7 +36,7 @@ public class PolarListener implements Listener {
     }
 
     @EventHandler(ignoreCancelled = true)
-    public void onBlockFromTo(BlockFromToEvent event) { // liquid flow / dragon egg
+    public void onBlockFromTo(BlockFromToEvent event) {
         PolarGenerator generator = PolarGenerator.fromWorld(event.getBlock().getWorld());
         if (generator == null) return;
         Config config = generator.getConfig();
@@ -46,7 +46,7 @@ public class PolarListener implements Listener {
     }
 
     @EventHandler(ignoreCancelled = true)
-    public void onBlockPhysics(BlockPhysicsEvent event) { // block placement rules
+    public void onBlockPhysics(BlockPhysicsEvent event) {
         PolarGenerator generator = PolarGenerator.fromWorld(event.getBlock().getWorld());
         if (generator == null) return;
         Config config = generator.getConfig();
@@ -56,7 +56,7 @@ public class PolarListener implements Listener {
     }
 
     @EventHandler(ignoreCancelled = true)
-    public void onChangeBlock(EntityChangeBlockEvent event) { // gravity blocks
+    public void onChangeBlock(EntityChangeBlockEvent event) {
         if (!event.getBlock().getType().hasGravity()) return;
 
         PolarGenerator generator = PolarGenerator.fromWorld(event.getBlock().getWorld());
@@ -72,18 +72,16 @@ public class PolarListener implements Listener {
         Polar.stopAutoSaveTask(event.getWorld().getKey());
     }
 
-
-    // WAND
     @EventHandler(ignoreCancelled = true)
     public void onChangeWorld(PlayerChangedWorldEvent event) {
-        // clear wand properties
+
         PersistentDataContainer data = event.getPlayer().getPersistentDataContainer();
         data.remove(Schematic.POS_1_KEY);
         data.remove(Schematic.POS_2_KEY);
     }
     @EventHandler
     public void onJoin(PlayerJoinEvent event) {
-        // clear wand properties
+
         PersistentDataContainer data = event.getPlayer().getPersistentDataContainer();
         data.remove(Schematic.POS_1_KEY);
         data.remove(Schematic.POS_2_KEY);

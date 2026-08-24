@@ -32,7 +32,7 @@ public class VersionCommand extends PolarCmd {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(VersionCommand.class);
 
-    private static final long CHECK_INTERVAL = 3 * 3_600_000L; // 3 hour in millis
+    private static final long CHECK_INTERVAL = 3 * 3_600_000L;
     private static long LAST_UPDATED = -1L;
     private static @Nullable GithubRelease CACHED_RELEASE = null;
 

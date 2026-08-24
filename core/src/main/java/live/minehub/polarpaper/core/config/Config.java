@@ -17,25 +17,6 @@ import java.util.*;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 
-/**
- * @see Config#getDefaultConfig(FileConfiguration) 
- * @see Builder#defaults()
- * @see Config#toBuilder() 
- * @param autoSaveIntervalTicks the time between each autosave in ticks (20 ticks = 1 second), -1 to disable autosaving
- * @param announceAutosave whether to send autosave messages regardless of "polar.notifications" permission
- * @param time the daytime of the world
- * @param saveOnStop whether to save on shutdown or when using /polar unload
- * @param loadOnStartup whether to load the world when the plugin is enabled
- * @param spawn the spawn location
- * @param worldRadiusBlocks horizontal radius in blocks around the spawn that is loaded and saved
- * @param difficulty the difficulty
- * @param async whether to create the world asynchronously. Can cause issues with other plugins
- * @param saveLight whether chunks are saved with light data.
- * Reduces CPU usage when loading the world but increases world size significantly
- * @param worldType Prefer WorldType.FLAT if possible as it skips unnecessary vanilla biome generation
- * @param environment
- * @param gamerules map of gamerules - custom rules: liquidPhysics, blockPhysics, blockGravity, blockFade
- */
 public record Config(
         int autoSaveIntervalTicks,
         boolean announceAutosave,
@@ -63,12 +44,11 @@ public record Config(
         put("mob_griefing", false);
         put("spread_vines", false);
         put("tnt_explodes", false);
-        put("blockFade", false); // custom gamerule
-        put("blockPhysics", true); // custom gamerule
-        put("blockGravity", true); // custom gamerule
-        put("liquidPhysics", true); // custom gamerule
+        put("blockFade", false);
+        put("blockPhysics", true);
+        put("blockGravity", true);
+        put("liquidPhysics", true);
 
-        // paper default gamerules, put here to remove clutter when saving other worlds
         put("max_command_sequence_length", 65536);
         put("max_block_modifications", 32768);
         put("max_command_forks", 65536);
@@ -92,7 +72,7 @@ public record Config(
             new EnumProperty<>(WorldType.class, "worldType", WorldType.FLAT, Config::worldType, Builder::worldType),
             new EnumProperty<>(World.Environment.class, "environment", World.Environment.NORMAL, Config::environment, Builder::environment),
             new GamerulesProperty("gamerules", DEFAULT_GAMERULES, Config::gamerules, (b, m) -> {
-                for (Map.Entry<String, Object> entry : m.entrySet()) { // add instead of replacing gamerules
+                for (Map.Entry<String, Object> entry : m.entrySet()) {
                     b.gamerule(entry.getKey(), entry.getValue());
                 }
                 return b;
@@ -145,12 +125,6 @@ public record Config(
         }
     }
 
-    /**
-     * Puts a world's settings into the config held in memory, without touching the file on disk.
-     * <p>
-     * Split out from {@link #writeToConfig} so that a caller on a thread it must not block can do this part
-     * there and leave writing the file itself to somewhere it costs nothing.
-     */
     public static void applyToConfig(FileConfiguration fileConfig, String worldName, Config config) {
         Config defaultConfig = getDefaultConfig(fileConfig);
 
@@ -202,14 +176,12 @@ public record Config(
             this.compressionLevel = record.compressionLevel;
             this.worldType = record.worldType;
             this.environment = record.environment;
-            // Copied so that building on top of an existing config does not write back into it
+
             this.gamerules = new HashMap<>(record.gamerules);
         }
 
         public Builder fromWorld(World world) {
-            // Taken without its world, because only the coordinates are ever written to the config and a
-            // config read back from the file has no world either. Leaving it set would make two configs
-            // describing identical settings compare unequal, which is how a pointless write is recognised.
+
             Location spawn = world.getSpawnLocation().clone();
             spawn.setWorld(null);
 
@@ -226,7 +198,7 @@ public record Config(
                 }
 
                 Object gameRuleValue = world.getGameRuleValue(gamerule);
-                Object gameRuleDefault = world.getGameRuleDefault(gamerule); // 1.21.11 depends on this deprecated method
+                Object gameRuleDefault = world.getGameRuleDefault(gamerule);
                 if (gameRuleValue != gameRuleDefault) {
                     gamerule(name, gameRuleValue);
                 } else {
@@ -237,11 +209,6 @@ public record Config(
             return this;
         }
 
-        /**
-         * The time between each autosave in ticks (20 ticks = 1 second)
-         * <p>
-         * -1 to disable autosaving
-         */
         public Builder autoSaveIntervalTicks(int autoSaveIntervalTicks) {
             this.autoSaveIntervalTicks = autoSaveIntervalTicks;
             return this;
@@ -257,17 +224,11 @@ public record Config(
             return this;
         }
 
-        /**
-         * Whether to save on shutdown or when using /polar unload
-         */
         public Builder saveOnStop(boolean saveOnStop) {
             this.saveOnStop = saveOnStop;
             return this;
         }
 
-        /**
-         * Whether to load the world when the plugin is enabled
-         */
         public Builder loadOnStartup(boolean loadOnStartup) {
             this.loadOnStartup = loadOnStartup;
             return this;
@@ -291,19 +252,11 @@ public record Config(
             return this;
         }
 
-        /**
-         * Whether to create the world asynchronously.
-         * Can cause issues with other plugins
-         */
         public Builder async(boolean async) {
             this.async = async;
             return this;
         }
 
-        /**
-         * Whether chunks are saved with light data.
-         * Reduces CPU usage when loading the world but increases world size significantly
-         */
         public Builder saveLight(boolean saveLight) {
             this.saveLight = saveLight;
             return this;
@@ -314,20 +267,11 @@ public record Config(
             return this;
         }
 
-        /**
-         * Set the ZSTD compression level, higher means smaller file size but longer save times.
-         * @see Zstd#maxCompressionLevel()
-         * @see Zstd#minCompressionLevel()
-         * @see Zstd#defaultCompressionLevel()
-         */
         public Builder compressionLevel(int compressionLevel) {
             this.compressionLevel = compressionLevel;
             return this;
         }
 
-        /**
-         * Prefer WorldType.FLAT if possible as it skips unnecessary vanilla biome generation
-         */
         public Builder worldType(@NotNull WorldType worldType) {
             this.worldType = Objects.requireNonNull(worldType, "Null worldType");
             return this;
@@ -409,14 +353,6 @@ public record Config(
             writer.apply(builder, defaultValue);
         }
 
-        /**
-         * Applies the configured value, falling back to the default if the file holds something this property
-         * cannot use.
-         * <p>
-         * The value is read out of the file untyped, so a hand edited config can hold a string where a number
-         * belongs. Letting that escape would abort loading the world, and abort every autosave after it, over
-         * a single typo.
-         */
         public void apply(Builder builder, FileConfiguration config, String prefix) {
             T value;
             try {
@@ -438,7 +374,7 @@ public record Config(
             T value = get(config);
             T defaultValue = get(defaultConfig);
             String fullPath = prefix + path;
-            // only save if the config differs from the default
+
             if (value.equals(defaultValue)) fileConfig.set(fullPath, null);
             else fileConfig.set(fullPath, value);
             if (!comments.isEmpty()) fileConfig.setInlineComments(fullPath, comments);
@@ -492,11 +428,10 @@ public record Config(
             T value = get(config);
             T defaultValue = get(defaultConfig);
             String fullPath = prefix + getPath();
-            // only save if the config differs from the default
+
             if (value.equals(defaultValue)) fileConfig.set(fullPath, null);
             else fileConfig.set(fullPath, value.name());
 
-            // generate a string based on all the enum values
             StringBuilder commentBuilder = new StringBuilder();
             commentBuilder.append("One of: ");
             T[] enums = enumClass.getEnumConstants();
@@ -536,7 +471,7 @@ public record Config(
             Location value = get(config);
             Location defaultValue = get(defaultConfig);
             String fullPath = prefix + getPath();
-            // only save if the config differs from the default
+
             if (value.equals(defaultValue)) fileConfig.set(fullPath, null);
             else {
                 fileConfig.set(fullPath, locationToString(value));
@@ -558,12 +493,12 @@ public record Config(
 
             String[] split = string.split(",");
             try {
-                if (split.length == 3) { // x y z
+                if (split.length == 3) {
                     String x = split[0];
                     String y = split[1];
                     String z = split[2];
                     return new Location(null, Double.parseDouble(x), Double.parseDouble(y), Double.parseDouble(z));
-                } else if (split.length == 5) { // x y z yaw pitch
+                } else if (split.length == 5) {
                     String x = split[0];
                     String y = split[1];
                     String z = split[2];
@@ -606,7 +541,6 @@ public record Config(
             Map<String, Object> defaultValue = get(defaultConfig);
             String fullPath = prefix + getPath();
 
-            // only save if the config differs from the default
             List<Map<String, ?>> gamerulesToSave = gamerulesList(value);
             gamerulesToSave.removeAll(gamerulesList(defaultValue));
             if (gamerulesToSave.isEmpty()) gamerulesToSave = null;
@@ -622,8 +556,7 @@ public record Config(
             for (Map<?, ?> ymlGamerule : ymlGamerules) {
                 for (Map.Entry<?, ?> entry : ymlGamerule.entrySet()) {
                     if (!(entry.getKey() instanceof String key)) continue;
-                    // "- someRule:" with nothing after it parses as a null value, which nothing downstream
-                    // can apply and which would break writing the config back out
+
                     if (entry.getValue() == null) {
                         LOGGER.warn("Ignoring gamerule '{}' because it has no value", key);
                         continue;
@@ -638,7 +571,7 @@ public record Config(
         private @NotNull List<Map<String, ?>> gamerulesList(Map<String, Object> gamerules) {
             List<Map<String, ?>> gamerulesList = new ArrayList<>(gamerules.size());
             for (Map.Entry<String, Object> entry : gamerules.entrySet()) {
-                if (entry.getValue() == null) continue; // Map.of rejects nulls, and a valueless rule is meaningless
+                if (entry.getValue() == null) continue;
                 gamerulesList.add(Map.of(entry.getKey(), entry.getValue()));
             }
             return gamerulesList;

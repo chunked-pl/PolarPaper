@@ -46,7 +46,6 @@ public class CreateFromRegionCommand extends PolarCmd {
             return;
         }
 
-        // The name becomes a file name in the worlds folder, so it must not be able to point outside it
         if (WorldKey.validatePath(ctx.getSource().getSender(), newWorldName) == null) return;
 
         long before = System.nanoTime();
@@ -61,13 +60,11 @@ public class CreateFromRegionCommand extends PolarCmd {
         BlockSelector.RegionBlockSelector blockSelector = BlockSelector.RegionBlockSelector.fromCorners(pos1, pos2);
 
         Vector3i schemOffset = new Vector3i();
-        // Being ran from console
+
         if (ctx.getSource().getSender() instanceof Player player) {
             schemOffset = player.getLocation().toVector().toVector3i();
         }
         Vector3i finalSchemOffset = schemOffset;
-
-        // TODO: option to center the world
 
         CompletableFuture<PolarWorld> future = PolarWorld.convert(bukkitWorld, VersionUtil.getPolarFeaturesWorldAccess(), blockSelector, true);
         future.thenAcceptAsync(polarWorld -> {
@@ -118,7 +115,7 @@ public class CreateFromRegionCommand extends PolarCmd {
 
     private static int run(CommandContext<CommandSourceStack> ctx) {
         CommandSender sender = ctx.getSource().getSender();
-        // Being ran from console
+
         if (!(sender instanceof Player player)) return Command.SINGLE_SUCCESS;
 
         World bukkitWorld = player.getWorld();
@@ -155,12 +152,12 @@ public class CreateFromRegionCommand extends PolarCmd {
         builder.then(Commands.argument("new world name", StringArgumentType.string())
                 .executes(CreateFromRegionCommand::run)
                 .then(createWorldNameArgument(false)
-                        .then(Commands.argument("x1", IntegerArgumentType.integer())
-                                .then(Commands.argument("y1", IntegerArgumentType.integer())
-                                        .then(Commands.argument("z1", IntegerArgumentType.integer())
-                                                .then(Commands.argument("x2", IntegerArgumentType.integer())
-                                                        .then(Commands.argument("y2", IntegerArgumentType.integer())
-                                                                .then(Commands.argument("z2", IntegerArgumentType.integer())
+                        .then(Commands.argument("x1", IntegerArgumentType.integer(-30_000_000, 30_000_000))
+                                .then(Commands.argument("y1", IntegerArgumentType.integer(-30_000_000, 30_000_000))
+                                        .then(Commands.argument("z1", IntegerArgumentType.integer(-30_000_000, 30_000_000))
+                                                .then(Commands.argument("x2", IntegerArgumentType.integer(-30_000_000, 30_000_000))
+                                                        .then(Commands.argument("y2", IntegerArgumentType.integer(-30_000_000, 30_000_000))
+                                                                .then(Commands.argument("z2", IntegerArgumentType.integer(-30_000_000, 30_000_000))
                                                                         .executes(ctx -> {
                                                                             Identifier worldId = ctx.getArgument("world name", Identifier.class);
                                                                             String newWorldName = ctx.getArgument("new world name", String.class);

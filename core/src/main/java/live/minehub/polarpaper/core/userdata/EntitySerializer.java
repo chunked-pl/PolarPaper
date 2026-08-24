@@ -20,23 +20,11 @@ import java.util.function.BooleanSupplier;
 public interface EntitySerializer {
     Logger LOGGER = LoggerFactory.getLogger(EntitySerializer.class);
 
-    /**
-     * How long {@link #saveOnEntityThread} waits before giving up on an entity.
-     */
     int SAVE_TIMEOUT_SECONDS = 10;
 
     net.minecraft.world.entity.Entity compoundToEntity(World world, CompoundTag compound);
     CompletableFuture<byte @Nullable []> entityToBytes(Entity entity, Plugin plugin);
 
-    /**
-     * Runs a serialisation attempt on Paper's main thread and waits for the result, for the cases where
-     * saving an entity fires events that must not run asynchronously.
-     * <p>
-     * The wait is bounded. A removed entity or a shutting down server may never run the scheduled task, and
-     * waiting forever there would hang the save along with anything blocking on it, such as the shutdown save.
-     *
-     * @return whether the entity was saved
-     */
     static boolean saveOnEntityThread(@NotNull Entity entity, @NotNull Plugin plugin, @NotNull BooleanSupplier save) {
         if (Bukkit.isPrimaryThread()) {
             try {

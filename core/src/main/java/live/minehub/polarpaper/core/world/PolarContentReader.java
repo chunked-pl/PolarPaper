@@ -24,14 +24,14 @@ final class PolarContentReader {
         ByteBuf bb = Unpooled.wrappedBuffer(data);
 
         int magic = bb.readInt();
-        if (magic != PolarConstants.MAGIC_NUMBER) {
+        if (magic != PolarWorld.MAGIC_NUMBER) {
             throw new IllegalStateException("Invalid magic number");
         }
 
         short version = bb.readShort();
         PolarReader.validateVersion(version);
 
-        int dataVersion = version >= PolarConstants.VERSION_DATA_CONVERTER
+        int dataVersion = version >= PolarWorld.VERSION_DATA_CONVERTER
                 ? getVarInt(bb)
                 : dataConverter.defaultDataVersion();
 
@@ -51,7 +51,7 @@ final class PolarContentReader {
         }
 
         byte[] userData = new byte[0];
-        if (version > PolarConstants.VERSION_WORLD_USERDATA) {
+        if (version > PolarWorld.VERSION_WORLD_USERDATA) {
             userData = ByteArrayUtil.getByteArray(content);
         }
 

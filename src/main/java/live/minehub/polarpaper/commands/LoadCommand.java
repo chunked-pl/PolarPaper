@@ -83,8 +83,6 @@ public class LoadCommand extends PolarCmd {
 
         long before = System.nanoTime();
 
-        // whenComplete rather than thenAccept, so an unreadable file is reported instead of being swallowed.
-        // The cause itself is already logged by createWorld.
         Polar.createWorld(source, newWorldName).whenComplete((world, _) -> {
             if (world == null) {
                 ctx.getSource().getSender().sendMessage(

@@ -173,16 +173,12 @@ public class PolarStreamLoader {
             }
         }
 
-        // Says plainly how much of the file was made live, so that a residency which quietly fell back to
-        // loading everything is visible in the log rather than only in the memory graph
         LOGGER.info("Streamed {}: {} chunks in the file, {} kept archived",
                 world.getKey(), chunkCount, archive == null ? 0 : archive.size());
 
         CompletableFuture<Void> scheduledChunks = CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new));
         if (readFailure == null) return scheduledChunks;
 
-        // Some chunks may already be queued on the main thread. Do not report failure (and let the caller unload
-        // the world) until those tasks have stopped touching it.
         Throwable finalReadFailure = readFailure;
         return scheduledChunks.handle((_, scheduledFailure) -> {
             if (scheduledFailure != null && scheduledFailure != finalReadFailure) {
@@ -200,7 +196,6 @@ public class PolarStreamLoader {
         int chunkX = getVarInt(bb);
         int chunkZ = getVarInt(bb);
 
-        // Outside the world entirely: it is not part of the world and is not kept
         if (!blockSelector.testChunk(chunkX, chunkZ)) {
             PolarReader.skipChunkBody(version, bb, sectionCount);
             return null;
@@ -254,10 +249,8 @@ public class PolarStreamLoader {
             addBlockEntity(polarBlockEntity, newLevelChunk);
         }
 
-        // Skipped rather than read: insertChunk primes the heightmaps from the blocks it just placed
         PolarReader.skipHeightmaps(bb);
 
-        // Objects
         byte[] userData = live.minehub.polarpaper.core.util.ByteArrayUtil.getByteArray(bb);
 
         return prepareChunkAsync(newLevelChunk).thenCompose(_ ->
@@ -275,21 +268,10 @@ public class PolarStreamLoader {
                 }));
     }
 
-    /**
-     * Keeps a chunk that was just put into the world from being unloaded again.
-     * <p>
-     * The ticket is taken on the next tick rather than now, because asking for one goes through
-     * {@link org.bukkit.World#getChunkAt}, which drives the chunk system's own loading pipeline. Run against a
-     * chunk holder that was populated by hand a moment ago, that pipeline finds a half built chunk where it
-     * expects a finished one and fails. By the next tick the holder is settled and the ticket is just a ticket.
-     */
     public static void retainChunk(@NotNull Plugin plugin, @NotNull World world, int chunkX, int chunkZ) {
         Bukkit.getScheduler().runTask(plugin, () -> world.addPluginChunkTicket(chunkX, chunkZ, plugin));
     }
 
-    /**
-     * Replaces every unselected block in a boundary section with air before the chunk becomes visible.
-     */
     public static void maskOutsideSelection(@NotNull LevelChunkSection section, @NotNull BlockSelector blockSelector,
                                             int chunkX, int chunkZ, int sectionY) {
         if (blockSelector.containsEntireSection(chunkX, chunkZ, sectionY) || section.hasOnlyAir()) return;
@@ -314,32 +296,14 @@ public class PolarStreamLoader {
         return blockSelector.test(x, y, z);
     }
 
-    /**
-     * Builds the heightmaps before a chunk is made visible to the world. Keeping this work asynchronous retains
-     * loading throughput, while awaiting it prevents a data race with chunk ticking and packet creation.
-     */
     public static CompletableFuture<Void> prepareChunkAsync(LevelChunk chunk) {
         return CompletableFuture.runAsync(() -> primeMissingHeightmaps(chunk));
     }
 
-    /**
-     * Builds the heightmaps of a chunk that is about to be inserted, for callers already off the main thread.
-     */
     public static void primeChunk(@NotNull LevelChunk chunk) {
         primeMissingHeightmaps(chunk);
     }
 
-    /**
-     * Puts a chunk's real blocks into a chunk that is already in the world, in place of what it holds now.
-     * <p>
-     * Used where a position was made visible as empty before its contents were meant to be seen. Swapping the
-     * sections of the chunk that is already there, rather than putting a different chunk in its place, leaves
-     * the chunk holder, its entities and everything tracking it untouched, so the only thing that changes is
-     * what the blocks are.
-     * <p>
-     * The chunk is relit and resent afterwards, because terrain appearing out of nothing changes the light of
-     * its neighbours as well as its own. Must be called on the thread that owns the world.
-     */
     public static void replaceChunkBlocks(@NotNull ServerLevel serverLevel, @NotNull World world,
                                            @NotNull LevelChunk target, @NotNull LevelChunk source,
                                            @NotNull PolarChunk polarChunk, @NotNull PolarWorldAccess worldAccess,
@@ -360,46 +324,24 @@ public class PolarStreamLoader {
         }
         worldAccess.loadChunkData(world, target, polarChunk.userData(), blockSelector);
 
-        // Light is recomputed rather than copied from the file: the neighbours were lit against an empty
-        // chunk here, and only the light engine knows how to correct them now that it is not empty
         relight(serverLevel, target);
         world.refreshChunk(target.locX, target.locZ);
     }
 
-    /**
-     * Relights a chunk and everything its light can reach.
-     */
     private static void relight(@NotNull ServerLevel serverLevel, @NotNull LevelChunk chunk) {
         ThreadedLevelLightEngine lightEngine = (ThreadedLevelLightEngine) serverLevel.getLightEngine();
         lightEngine.starlight$serverRelightChunks(List.of(chunk.getPos()), _ -> {}, _ -> {});
     }
 
-    /**
-     * Puts a chunk built by hand into the world, as though the chunk system had loaded it itself.
-     * <p>
-     * Refuses the position if the chunk system already holds a chunk of its own there, and returns false.
-     * That case is not ours to take over: the system finishes its own load afterwards and writes its chunk
-     * back into the holder, which would leave the holder carrying a half built chunk while the ticket level
-     * already says a finished one stands there. Everything that later asks the position to tick reads that
-     * as a finished chunk and fails on the cast.
-     * <p>
-     * Whether a refusal matters is the caller's to judge, so it is reported rather than logged: losing a
-     * chunk of real terrain is a problem, while a position that was only going to hold a stand in is not,
-     * because the chunk the system puts there is the same air the stand in was made of.
-     *
-     * @return whether the chunk was put into the world
-     */
     public static boolean insertChunk(ServerLevel serverLevel, NoUnloadLevelChunk newLevelChunk) {
         int chunkX = newLevelChunk.locX;
         int chunkZ = newLevelChunk.locZ;
 
-        // Usually already done by prepareChunkAsync. This cheap missing-only check keeps direct callers safe too.
         primeMissingHeightmaps(newLevelChunk);
 
         ChunkTaskScheduler chunkTaskScheduler = serverLevel.moonrise$getChunkTaskScheduler();
         ChunkHolderManager chunkHolderManager = chunkTaskScheduler.chunkHolderManager;
 
-        // Begin reflection hell :D
         ReentrantAreaLock.Node lock = chunkHolderManager.ticketLockArea.lock(chunkX, chunkZ);
         ReentrantAreaLock.Node lock1 = chunkTaskScheduler.schedulingLockArea.lock(chunkX, chunkZ);
         NewChunkHolder newChunkHolder;
@@ -422,8 +364,6 @@ public class PolarStreamLoader {
         CURRENT_GEN_STATUS_HANDLE.set(newChunkHolder, ChunkStatus.FULL);
         newLevelChunk.moonrise$setChunkHolder(newChunkHolder);
 
-        // Populate every status up to and including FULL
-        // This mirrors what replaceProtoChunk() does, but for all statuses including FULL
         NewChunkHolder.ChunkCompletion[] chunkCompletions = (NewChunkHolder.ChunkCompletion[]) CHUNK_COMPLETIONS_HANDLE.get(newChunkHolder);
         for (ChunkStatus status : ALL_STATUSES) {
             NewChunkHolder.ChunkCompletion completion = new NewChunkHolder.ChunkCompletion(newLevelChunk, status);
@@ -472,8 +412,7 @@ public class PolarStreamLoader {
     }
 
     private static void validateChunkCount(int chunkCount, ByteBuf data, int sectionCount) {
-        // Every chunk contains two coordinates, one marker per section, a block-entity count, a heightmap mask
-        // and a userdata length. This lower bound rejects corrupt counts before they can allocate a huge list.
+
         int minimumChunkBytes = sectionCount + Integer.BYTES + 4;
         if (chunkCount < 0 || chunkCount > data.readableBytes() / minimumChunkBytes) {
             throw new IllegalArgumentException("Invalid chunk count: " + chunkCount);
@@ -492,21 +431,18 @@ public class PolarStreamLoader {
         BlockPos blockPos = new BlockPos(chunk.locX * 16 + x, y, chunk.locZ * 16 + z);
 
         if (!(blockState.getBlock() instanceof EntityBlock entityBlock)) {
-//            PolarPaper.logger().warning("Block " + blockState + " does not have a block entity");
-//            throw new IllegalArgumentException("Block " + blockState + " does not have a block entity");
+
             return;
         }
 
         BlockEntity blockEntity = entityBlock.newBlockEntity(blockPos, blockState);
         if (blockEntity == null) {
-//            PolarPaper.logger().warning("Block " + blockState + " returned null block entity");
-//            throw new IllegalArgumentException("Block " + blockState + " returned null block entity");
+
             return;
         }
 
         var registryAccess = ((CraftServer) Bukkit.getServer()).getServer().registryAccess();
 
-        // Load NBT data into the block entity
         ProblemReporter.ScopedCollector problemReporter = new ProblemReporter.ScopedCollector(() -> "addBlockEntity", LogUtils.getLogger());
         blockEntity.loadWithComponents(TagValueInput.create(problemReporter, registryAccess, nbt));
 
@@ -523,7 +459,5 @@ public class PolarStreamLoader {
     private static void assertThat(boolean condition, @NotNull String message) {
         if (!condition) throw new IllegalArgumentException(message);
     }
-
-
 
 }

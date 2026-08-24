@@ -86,10 +86,6 @@ public class BlockUtil {
         return levelChunkSection.getBlockState(newBlockX, newBlockY, newBlockZ);
     }
 
-    /**
-     * Searches a world for a specific block state
-     * @return a list of positions of the block state, empty list if none found
-     */
     public static List<Vector3i> findBlocks(World world, BlockState blockState) {
         CraftWorld craftWorld = (CraftWorld) world;
         ServerLevel serverLevel = craftWorld.getHandle();
@@ -104,10 +100,6 @@ public class BlockUtil {
         return structureVoidPositions;
     }
 
-    /**
-     * Searches a chunk in a world for a specific block state
-     * @return a list of positions of the block state, empty list if none found
-     */
     public static List<Vector3i> findBlocks(World world, int chunkX, int chunkZ, BlockState blockState) {
         CraftWorld craftWorld = (CraftWorld) world;
         ServerLevel serverLevel = craftWorld.getHandle();

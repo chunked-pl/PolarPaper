@@ -113,7 +113,7 @@ public class Schematic {
     }
 
     private static void pasteSection(PolarSection polarSection, Setter setter, Vector3i offset, Vector3i pasteOffset, Rotation rotation, IgnoreAir ignoreAir) {
-        // Blocks
+
         long[] blockDataLongs = polarSection.blockData();
         int blockDataBits = blockDataLongs == null ? 0 : PaletteUtil.getBitsForLongLength(blockDataLongs.length, PolarSection.BLOCK_PALETTE_SIZE);
         int[] blockData = new int[PolarSection.BLOCK_PALETTE_SIZE];
@@ -121,8 +121,6 @@ public class Schematic {
             PaletteUtil.unpack(blockData, blockDataLongs, blockDataBits);
         }
 
-        // Rotating the palette once, rather than every block, both avoids 4096 rotations per section and keeps
-        // a uniform section from having its single state rotated again for each block it is written to
         String[] rawBlockPalette = polarSection.blockPalette();
         BlockState[] materialPalette = new BlockState[rawBlockPalette.length];
         for (int i = 0; i < rawBlockPalette.length; i++) {
@@ -152,17 +150,11 @@ public class Schematic {
     }
 
     public enum IgnoreAir {
-        /**
-         * Ignore all air blocks
-         */
+
         ALL,
-        /**
-         * Only ignore empty sections (default)
-         */
+
         EMPTY_SECTION,
-        /**
-         * Do not ignore air
-         */
+
         NONE
     }
 

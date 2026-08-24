@@ -24,23 +24,16 @@ public class WorldKey {
                 .toLowerCase();
     }
 
-    /**
-     * Gets a bukkit world by first trying Polar's namespace, then Minecraft's, then the plain name
-     * @param worldName The name of the world
-     * @return null if no world found
-     */
     public static @Nullable World getWorld(String worldName) {
         worldName = worldName
                 .replaceAll(".polar$", "")
                 .replace(" ", "_")
                 .toLowerCase();
 
-        // try polar namespace
         NamespacedKey worldKey = NamespacedKey.fromString(worldName, PolarPaper.getPlugin());
         World world = worldKey == null ? null : Bukkit.getWorld(worldKey);
         if (world != null) return world;
 
-        // try minecraft namespace
         worldKey = NamespacedKey.fromString(worldName);
         world = worldKey == null ? null : Bukkit.getWorld(worldKey);
         if (world != null) return world;
@@ -50,7 +43,7 @@ public class WorldKey {
 
     public static @Nullable World getWorld(Identifier id) {
         if (id.getNamespace().equals(Identifier.DEFAULT_NAMESPACE)) {
-            // try polar namespace
+
             NamespacedKey polarKey = NamespacedKey.fromString(id.getPath(), PolarPaper.getPlugin());
             World polarWorld = polarKey == null ? null : Bukkit.getWorld(polarKey);
             if (polarWorld != null) return polarWorld;
@@ -59,9 +52,6 @@ public class WorldKey {
         World world = Bukkit.getWorld(new NamespacedKey(id.getNamespace(), id.getPath()));
         if (world != null) return world;
 
-        // A world is not named after its key. The server's own worlds sit in folders called "world"
-        // and "world_nether" while their keys are minecraft:overworld and minecraft:the_nether, so
-        // looking only by key answers "does not exist" for every world the server started with.
         return id.getNamespace().equals(Identifier.DEFAULT_NAMESPACE) ? Bukkit.getWorld(id.getPath()) : null;
     }
 
@@ -74,7 +64,7 @@ public class WorldKey {
     public static Path validatePath(CommandSender sender, String userPath) {
         Path pluginFolder = PolarPaper.getPlugin().getDataPath();
         Path worldsFolder = pluginFolder.resolve("worlds");
-        userPath = userPath + (userPath.endsWith(".polar") ? "" : ".polar"); // ensure ends with .polar
+        userPath = userPath + (userPath.endsWith(".polar") ? "" : ".polar");
         Path path;
         try {
             path = worldsFolder.resolve(userPath);

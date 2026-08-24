@@ -18,14 +18,6 @@ import org.jetbrains.annotations.NotNull;
 
 import java.util.Map;
 
-/**
- * A snapshot of what a world's loaded chunks are holding on the heap.
- * <p>
- * Only what the world itself owns is counted, never what another plugin has attached to it. The arrays are
- * measured exactly; the objects around them are estimated, so treat the total as being good to roughly ten
- * percent rather than exact. The way to settle it for certain is still to unload the world and compare the
- * used heap after a full GC.
- */
 public record WorldUsage(
         int chunks,
         int sections,
@@ -41,20 +33,9 @@ public record WorldUsage(
         long archivedBytes
 ) {
 
-    /**
-     * Measured on Paper 26.2: a light nibble holding an array costs this much, one without an array only its
-     * own header.
-     */
     private static final long NIBBLE_WITH_ARRAY_BYTES = 2123;
     private static final long EMPTY_NIBBLE_BYTES = 32;
 
-    /**
-     * What a chunk and a section cost beyond the arrays counted here: the chunk and its holder, entity
-     * slices, tick lists, heightmap and palette objects.
-     * <p>
-     * Calibrated against a 1369 chunk world whose real cost was measured by unloading it and forcing a full
-     * GC, which put these within two percent of the 81.7 MB it turned out to retain.
-     */
     private static final long CHUNK_OVERHEAD_BYTES = 3072;
     private static final long EMPTY_SECTION_OVERHEAD_BYTES = 256;
     private static final long POPULATED_SECTION_OVERHEAD_BYTES = 1600;
@@ -63,18 +44,10 @@ public record WorldUsage(
         return blockBytes + biomeBytes + lightBytes + heightmapBytes + overheadBytes + archivedBytes;
     }
 
-    /**
-     * Whether this world is holding part of itself compressed rather than live.
-     */
     public boolean hasArchive() {
         return archivedChunks > 0;
     }
 
-    /**
-     * Walks a world's chunk holders and adds up what they are holding.
-     * <p>
-     * Reads live chunk data, so it has to run on the thread that owns the world.
-     */
     public static @NotNull WorldUsage measure(@NotNull World world) {
         ServerLevel level = ((CraftWorld) world).getHandle();
         ChunkHolderManager chunkHolderManager = level.moonrise$getChunkTaskScheduler().chunkHolderManager;
@@ -113,8 +86,6 @@ public record WorldUsage(
                 + (long) sectionsWithBlocks * POPULATED_SECTION_OVERHEAD_BYTES
                 + (long) (sections - sectionsWithBlocks) * EMPTY_SECTION_OVERHEAD_BYTES;
 
-        // Chunks left in the file instead of made live cost this world their positions and nothing else,
-        // which is worth reporting precisely because it is so much less than being live would cost
         PolarGenerator generator = PolarGenerator.fromWorld(world);
         PolarChunkArchive archive = generator == null ? null : generator.getChunkArchive();
 
@@ -129,10 +100,6 @@ public record WorldUsage(
         return (PalettedContainer<Holder<Biome>>) section.getBiomes();
     }
 
-    /**
-     * A section that holds a single block or biome throughout stores no per entry data at all, and reports an
-     * empty array here.
-     */
     private static long storageBytes(PalettedContainer<?> container) {
         return (long) container.data.storage().getRaw().length * Long.BYTES;
     }

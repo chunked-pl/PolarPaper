@@ -55,10 +55,6 @@ public abstract class PolarCmd {
         }
     }
 
-    /**
-     * Aliases are built from the same definition and share the primary permission, so granting
-     * {@code polarpaper.goto} is enough for {@code /polar tp} as well.
-     */
     private LiteralArgumentBuilder<CommandSourceStack> buildSubcommand(String literal) {
         LiteralArgumentBuilder<CommandSourceStack> builder = Commands.literal(literal)
                 .requires(source -> source.getSender().hasPermission(getPermission()))
@@ -76,9 +72,6 @@ public abstract class PolarCmd {
         return aliases;
     }
 
-    /**
-     * Every literal this subcommand answers to, the primary name first.
-     */
     public List<String> getLiterals() {
         if (aliases.isEmpty()) return List.of(name);
 
@@ -109,12 +102,6 @@ public abstract class PolarCmd {
                 });
     }
 
-    /**
-     * The names of the worlds in the worlds folder, cached briefly.
-     * <p>
-     * Brigadier asks for suggestions on every keystroke, so without this every character typed lists the
-     * folder from disk on the thread handling the command.
-     */
     private static List<String> listSavedWorldNames() {
         long now = System.nanoTime();
         if (cachedWorldNames != null && now - cachedWorldNamesAt < WORLD_NAME_CACHE_NANOS) return cachedWorldNames;
@@ -124,7 +111,7 @@ public abstract class PolarCmd {
         try (Stream<Path> files = Files.list(worldsFolder)) {
             files.forEach(path -> worldNames.add(path.getFileName().toString().replaceAll("\\.polar$", "")));
         } catch (IOException _) {
-            // Folder missing or unreadable, so there is nothing to suggest
+
         }
 
         cachedWorldNames = worldNames;
@@ -149,8 +136,6 @@ public abstract class PolarCmd {
                             s.suggest(worldKey);
                         }
 
-                        // The server's own worlds go by their folder name rather than their key, so
-                        // "world" has to be offered alongside minecraft:overworld
                         String worldName = world.getName().toLowerCase();
                         if (!worldName.equals(worldKey) && worldName.startsWith(typed)
                             && IDENTIFIER_PATH.matcher(worldName).matches()) {

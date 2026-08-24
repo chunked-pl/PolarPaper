@@ -60,9 +60,6 @@ public class UsageCommand extends PolarCmd {
         return Command.SINGLE_SUCCESS;
     }
 
-    /**
-     * Refreshes the action bar until the time runs out, or until there is nobody left to show it to.
-     */
     private static void track(Player player, World world) {
         int[] ticksLeft = {DURATION_TICKS};
         BukkitTask[] taskHolder = new BukkitTask[1];
@@ -70,7 +67,6 @@ public class UsageCommand extends PolarCmd {
         taskHolder[0] = Bukkit.getScheduler().runTaskTimer(PolarPaper.getPlugin(), () -> {
             ticksLeft[0] -= UPDATE_INTERVAL_TICKS;
 
-            // The world can be unloaded, and the player can leave, long before the 30 seconds are up
             if (ticksLeft[0] <= 0 || !player.isOnline() || Bukkit.getWorld(world.getKey()) == null) {
                 taskHolder[0].cancel();
                 return;
@@ -96,8 +92,7 @@ public class UsageCommand extends PolarCmd {
                 .append(usage.hasArchive()
                         ? field("archived", usage.archivedChunks() + " chunks, " + formatBytes(usage.archivedBytes()))
                         : Component.empty())
-                // Shown alongside so that a panel reading several hundred megabytes is not a surprise: most of
-                // the heap is the server itself, plus whatever garbage the last collection has not taken yet
+
                 .append(field("server heap", formatBytes(heapUsed) + " / " + formatBytes(runtime.maxMemory())))
                 .append(Component.text("  " + secondsLeft + "s", NamedTextColor.DARK_GRAY));
     }

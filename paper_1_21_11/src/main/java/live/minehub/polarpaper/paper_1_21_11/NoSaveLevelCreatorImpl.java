@@ -68,14 +68,12 @@ public class NoSaveLevelCreatorImpl implements NoSaveLevelCreator {
     public CompletableFuture<@Nullable World> createLevel(Plugin plugin, WorldCreator creator, Location spawnPos, Difficulty difficulty, Map<String, Object> gamerules, long time) {
         CraftServer craftServer = (CraftServer) Bukkit.getServer();
 
-        // Check if already existing
         World worldByKey = craftServer.getWorld(creator.key());
         if (worldByKey != null) {
             return null;
         }
 
         Preconditions.checkState(craftServer.getServer().getAllLevels().iterator().hasNext(), "Cannot create additional worlds on STARTUP");
-        //Preconditions.checkState(!this.console.isIteratingOverLevels, "Cannot create a world while worlds are being ticked"); // Paper - Cat - Temp disable. We'll see how this goes.
 
         String name = creator.name();
         ChunkGenerator chunkGenerator = creator.generator();
@@ -83,12 +81,9 @@ public class NoSaveLevelCreatorImpl implements NoSaveLevelCreator {
         File folder = new File(craftServer.getWorldContainer(), name);
         World world = craftServer.getWorld(name);
 
-        // Paper start
-
         if (world != null) {
             throw new IllegalArgumentException("Cannot create a world with key " + creator.key() + " and name " + name + " one (or both) already match a world that exists");
         }
-        // Paper end
 
         if (folder.exists()) {
             Preconditions.checkArgument(folder.isDirectory(), "File (%s) exists and isn't a folder", name);
@@ -139,10 +134,9 @@ public class NoSaveLevelCreatorImpl implements NoSaveLevelCreator {
 
             net.minecraft.world.Difficulty minecraftDifficulty;
 
-            // Can be used the id but method byId is deprecated
             try {
                 minecraftDifficulty = net.minecraft.world.Difficulty.valueOf(difficulty.name());
-            } catch (IllegalArgumentException e) { // This error should never happen
+            } catch (IllegalArgumentException e) {
                 LOGGER.warn("Difficulty {} not found, defaulting to NORMAL", difficulty.name());
                 minecraftDifficulty = net.minecraft.world.Difficulty.NORMAL;
             }
@@ -152,7 +146,7 @@ public class NoSaveLevelCreatorImpl implements NoSaveLevelCreator {
             for (Map.Entry<String, Object> entry : gamerules.entrySet()) {
                 NamespacedKey key = NamespacedKey.fromString(entry.getKey());
                 if (key == null) {
-                    if (Config.getDefaultGamerules().containsKey(entry.getKey())) continue; // is a custom gamerule, ignore
+                    if (Config.getDefaultGamerules().containsKey(entry.getKey())) continue;
                     LOGGER.warn("Invalid gamerule: {}", entry.getKey());
                     continue;
                 }
@@ -166,7 +160,6 @@ public class NoSaveLevelCreatorImpl implements NoSaveLevelCreator {
                 nmsGameRules.set(nmsRule, entry.getValue(), null);
             }
 
-            // fix for log "No key layers in MapLike[{}]"
             JsonObject defaultGenSettings = new JsonObject();
             defaultGenSettings.add("layers", new JsonArray());
             defaultGenSettings.add("biome", new JsonPrimitive("minecraft:plains"));
@@ -199,11 +192,11 @@ public class NoSaveLevelCreatorImpl implements NoSaveLevelCreator {
 
         long i = BiomeManager.obfuscateSeed(primaryLevelData.worldGenOptions().seed());
         List<CustomSpawner> list = ImmutableList.of(
-//                new PhantomSpawner(), new PatrolSpawner(), new CatSpawner(), new VillageSiege(), new WanderingTraderSpawner(primaryLevelData)
+
         );
         LevelStem customStem = contextLevelStemRegistry.getValue(actualDimension);
 
-        WorldInfo worldInfo = new CraftWorldInfo(primaryLevelData, levelStorageAccess, creator.environment(), customStem.type().value(), customStem.generator(), craftServer.getHandle().getServer().registryAccess()); // Paper - Expose vanilla BiomeProvider from WorldInfo
+        WorldInfo worldInfo = new CraftWorldInfo(primaryLevelData, levelStorageAccess, creator.environment(), customStem.type().value(), customStem.generator(), craftServer.getHandle().getServer().registryAccess());
         if (biomeProvider == null && chunkGenerator != null) {
             biomeProvider = chunkGenerator.getDefaultBiomeProvider(worldInfo);
         }
@@ -217,10 +210,6 @@ public class NoSaveLevelCreatorImpl implements NoSaveLevelCreator {
         } else {
             dimensionKey = ResourceKey.create(Registries.DIMENSION, Identifier.fromNamespaceAndPath(creator.key().namespace(), creator.key().value()));
         }
-
-//        if (!(craftServer.getWorlds().containsKey(name.toLowerCase(Locale.ROOT)))) {
-//            return null;
-//        }
 
         ChunkGenerator finalChunkGenerator = chunkGenerator;
         BiomeProvider finalBiomeProvider = biomeProvider;
@@ -243,9 +232,8 @@ public class NoSaveLevelCreatorImpl implements NoSaveLevelCreator {
 
             serverLevel.setDayTime(time);
 
-            craftServer.getServer().addLevel(serverLevel); // Paper - Put world into worldlist before initing the world; move up
+            craftServer.getServer().addLevel(serverLevel);
             craftServer.getServer().initWorld(serverLevel, primaryLevelData, primaryLevelData.worldGenOptions());
-            // Paper - Put world into worldlist before initing the world; move up
 
             craftServer.getServer().prepareLevel(serverLevel);
 

@@ -33,15 +33,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
-/**
- * Provides features not available in the standard polar format.
- * Currently entities and the chunk's persistent data.
- */
 public class EntitiesWorldAccess implements PolarWorldAccess {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(EntitiesWorldAccess.class);
 
-    // Current version of the features chunk data
     private static final byte CURRENT_FEATURES_VERSION = 2;
     private static final byte ENTITIES_VERSION = 1;
     private static final byte PERSISTENT_DATA_CONTAINER_VERSION = 2;

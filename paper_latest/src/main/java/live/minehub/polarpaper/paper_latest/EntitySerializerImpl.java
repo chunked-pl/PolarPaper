@@ -67,7 +67,7 @@ public class EntitySerializerImpl implements EntitySerializer {
         try {
             successful = nmsEntity.saveAsPassenger(tagValueOutput, true, false, false);
         } catch (Exception e) {
-            // saveAsPassenger sometimes calls events (e.g. VillagerAcquireTradeEvent), causing errors when called async so try again synchronously
+
             successful = EntitySerializer.saveOnEntityThread(entity, plugin,
                     () -> nmsEntity.saveAsPassenger(tagValueOutput, true, false, false));
         }
