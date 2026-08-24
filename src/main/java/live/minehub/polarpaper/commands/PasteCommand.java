@@ -25,6 +25,7 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.concurrent.CompletableFuture;
 
 public class PasteCommand extends PolarCmd {
 
@@ -112,7 +113,7 @@ public class PasteCommand extends PolarCmd {
             return Command.SINGLE_SUCCESS;
         }
 
-        return TaskFutures.runAsync(PolarPaper.getPlugin(), () -> {
+        TaskFutures.runAsync(PolarPaper.getPlugin(), () -> {
             byte[] polarBytes;
             try {
                 polarBytes = Files.readAllBytes(path);
@@ -128,16 +129,22 @@ public class PasteCommand extends PolarCmd {
                 Setter setter = targetGenerator == null
                         ? new Setter.World(player.getWorld())
                         : new Setter.World(player.getWorld(), targetGenerator.getWorldBlockSelector());
-                Schematic.paste(polarWorld, setter, pasteOffset, rotation, ignoreAir);
+                return Schematic.pasteAsync(polarWorld, setter, pasteOffset, rotation, ignoreAir);
             } catch (Exception e) {
                 String errorMsg = "Failed to paste schematic, please check logs for error";
                 LOGGER.error(errorMsg, e);
                 ctx.getSource().getSender().sendMessage(Component.text(errorMsg, NamedTextColor.RED));
-                return Command.SINGLE_SUCCESS;
+                return CompletableFuture.<Void>completedFuture(null);
+            }
+        }).thenCompose(stage -> stage)).whenComplete((_, failure) -> {
+            if (failure != null) {
+                LOGGER.error("Failed to paste world '" + worldName + ".polar'", failure);
+                player.sendMessage(Component.text("Failed to paste world '" + worldName + ".polar'", NamedTextColor.RED));
+                return;
             }
 
             int ms = (int) ((System.nanoTime() - before) / 1_000_000);
-            ctx.getSource().getSender().sendMessage(
+            player.sendMessage(
                     Component.text()
                             .append(Component.text("Pasted '", NamedTextColor.AQUA))
                             .append(Component.text(worldName, NamedTextColor.AQUA))
@@ -145,12 +152,8 @@ public class PasteCommand extends PolarCmd {
                             .append(Component.text(ms, NamedTextColor.AQUA))
                             .append(Component.text("ms", NamedTextColor.AQUA))
             );
-            return Command.SINGLE_SUCCESS;
-        })).exceptionally(failure -> {
-            LOGGER.error("Failed to load world '" + worldName + ".polar'", failure);
-            player.sendMessage(Component.text("Failed to load world '" + worldName + ".polar'", NamedTextColor.RED));
-            return Command.SINGLE_SUCCESS;
         }).join();
+        return Command.SINGLE_SUCCESS;
     }
 
     @Override
