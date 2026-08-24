@@ -16,6 +16,7 @@ import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -44,6 +45,8 @@ public class PolarWorld {
     public static int DEFAULT_COMPRESSION_LEVEL = 3;
 
     private static final int CHUNK_CONVERSION_TIMEOUT_MINUTES = 10;
+    private static final int AMORTIZE_SNAPSHOT_THRESHOLD = 64;
+    private static final long SNAPSHOT_BATCH_BUDGET_NANOS = 8_000_000L;
 
     private final short version;
     private final int dataVersion;
@@ -215,33 +218,84 @@ public class PolarWorld {
         }
 
         List<CompletableFuture<@Nullable PolarChunk>> futures = new ArrayList<>(chunkIndexes.size());
-        for (long chunkIndex : chunkIndexes) {
-            int chunkX = CoordConversion.chunkX(chunkIndex);
-            int chunkZ = CoordConversion.chunkZ(chunkIndex);
 
-            futures.add(PolarChunk.convert(world, chunkX, chunkZ, polarWorldAccess, blockSelector, config.saveLight(), loadChunks)
-                    .whenComplete((_, e) -> {
-                        if (e != null) LOGGER.error("Failed to convert chunk at {} {} in {}", chunkX, chunkZ, world.getKey(), e);
-                    }));
+        if (chunkIndexes.size() <= AMORTIZE_SNAPSHOT_THRESHOLD) {
+            for (long chunkIndex : chunkIndexes) {
+                futures.add(convertLogged(world, chunkIndex, polarWorldAccess, blockSelector, config, loadChunks));
+            }
+            return awaitChunks(world, futures).thenApply(_ -> buildResult(world, config, futures));
         }
 
-        return awaitChunks(world, futures).thenApply(_ -> {
-            List<PolarChunk> chunks = new ArrayList<>(futures.size());
-            for (CompletableFuture<PolarChunk> future : futures) {
-                PolarChunk polarChunk = future.join();
-                if (polarChunk == null) continue;
-                chunks.add(polarChunk);
-            }
+        CompletableFuture<Void> snapshotsScheduled = amortizeSnapshots(
+                world, chunkIndexes, futures, polarWorldAccess, blockSelector, config, loadChunks);
+        return snapshotsScheduled.thenCompose(_ -> awaitChunks(world, futures))
+                .thenApply(_ -> buildResult(world, config, futures));
+    }
 
-            int minHeight = world.getMinHeight();
-            int maxHeight = world.getMaxHeight() - 1;
-            return new PolarWorld(
-                    (byte) CoordConversion.sectionIndex(minHeight),
-                    (byte) CoordConversion.sectionIndex(maxHeight),
-                    config,
-                    chunks
-            );
-        });
+    private static CompletableFuture<@Nullable PolarChunk> convertLogged(
+            World world, long chunkIndex, PolarWorldAccess polarWorldAccess,
+            BlockSelector blockSelector, Config config, boolean loadChunks) {
+        int chunkX = CoordConversion.chunkX(chunkIndex);
+        int chunkZ = CoordConversion.chunkZ(chunkIndex);
+        return PolarChunk.convert(world, chunkX, chunkZ, polarWorldAccess, blockSelector, config.saveLight(), loadChunks)
+                .whenComplete((_, e) -> {
+                    if (e != null) LOGGER.error("Failed to convert chunk at {} {} in {}", chunkX, chunkZ, world.getKey(), e);
+                });
+    }
+
+    private static CompletableFuture<Void> amortizeSnapshots(
+            World world, Set<Long> chunkIndexes,
+            List<CompletableFuture<@Nullable PolarChunk>> futures,
+            PolarWorldAccess polarWorldAccess, BlockSelector blockSelector,
+            Config config, boolean loadChunks) {
+        Iterator<Long> remaining = chunkIndexes.iterator();
+        CompletableFuture<Void> allScheduled = new CompletableFuture<>();
+
+        Bukkit.getScheduler().runTaskTimer(polarWorldAccess.getPlugin(), new Runnable() {
+            @Override
+            public void run() {
+                if (!polarWorldAccess.getPlugin().isEnabled()) {
+                    allScheduled.completeExceptionally(
+                            new IllegalStateException("Plugin disabled while the autosave snapshot was being scheduled"));
+                    return;
+                }
+
+                long deadline = System.nanoTime() + SNAPSHOT_BATCH_BUDGET_NANOS;
+                try {
+                    while (System.nanoTime() < deadline) {
+                        if (!remaining.hasNext()) {
+                            allScheduled.complete(null);
+                            return;
+                        }
+                        futures.add(convertLogged(world, remaining.next(), polarWorldAccess, blockSelector, config, loadChunks));
+                    }
+                } catch (Throwable throwable) {
+                    LOGGER.error("Could not schedule chunk snapshots for {}", world.getKey(), throwable);
+                    allScheduled.completeExceptionally(throwable);
+                }
+            }
+        }, 0L, 1L);
+
+        return allScheduled;
+    }
+
+    private static PolarWorld buildResult(World world, Config config,
+                                          List<CompletableFuture<@Nullable PolarChunk>> futures) {
+        List<PolarChunk> chunks = new ArrayList<>(futures.size());
+        for (CompletableFuture<PolarChunk> future : futures) {
+            PolarChunk polarChunk = future.join();
+            if (polarChunk == null) continue;
+            chunks.add(polarChunk);
+        }
+
+        int minHeight = world.getMinHeight();
+        int maxHeight = world.getMaxHeight() - 1;
+        return new PolarWorld(
+                (byte) CoordConversion.sectionIndex(minHeight),
+                (byte) CoordConversion.sectionIndex(maxHeight),
+                config,
+                chunks
+        );
     }
 
     private static CompletableFuture<Void> awaitChunks(World world, List<CompletableFuture<@Nullable PolarChunk>> futures) {
