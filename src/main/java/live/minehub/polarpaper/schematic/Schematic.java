@@ -24,6 +24,8 @@ import org.slf4j.LoggerFactory;
 
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class Schematic {
 
@@ -34,7 +36,7 @@ public class Schematic {
     public static final NamespacedKey POS_1_KEY = new NamespacedKey("polarpaper", "pos1");
     public static final NamespacedKey POS_2_KEY = new NamespacedKey("polarpaper", "pos2");
 
-    private static volatile boolean pasteRunning;
+    private static final AtomicBoolean PASTE_RUNNING = new AtomicBoolean();
 
     public static void paste(PolarWorld polarWorld, Setter setter, Vector3i pasteOffset, Rotation rotation, IgnoreAir ignoreAir) {
         try {
@@ -47,8 +49,9 @@ public class Schematic {
     }
 
     public static CompletableFuture<Void> pasteAsync(PolarWorld polarWorld, Setter setter, Vector3i pasteOffset, Rotation rotation, IgnoreAir ignoreAir) {
-        if (pasteRunning) return CompletableFuture.failedFuture(new IllegalStateException(BUSY_MESSAGE));
-        pasteRunning = true;
+        if (!PASTE_RUNNING.compareAndSet(false, true)) {
+            return CompletableFuture.failedFuture(new IllegalStateException(BUSY_MESSAGE));
+        }
 
         byte[] userData = polarWorld.userData();
         Vector3i readOffset = WorldUserData.readSchematicOffset(userData);
@@ -67,8 +70,8 @@ public class Schematic {
                 while (System.nanoTime() < deadline) {
                     if (!chunks.hasNext()) {
                         holder[0].cancel();
-                        finishPaste(polarWorld, setter, pasteOffset, rotation, offset, blockEntityMap);
-                        done.complete(null);
+                        finishPaste(polarWorld, setter, pasteOffset, rotation, offset, blockEntityMap,
+                                () -> done.complete(null));
                         return;
                     }
                     pasteChunk(chunks.next(), setter, pasteOffset, rotation, offset, minSection, ignoreAir, blockEntityMap);
@@ -76,12 +79,12 @@ public class Schematic {
             } catch (Throwable throwable) {
                 holder[0].cancel();
                 LOGGER.error("Schematic paste failed halfway through; the world is partially pasted", throwable);
-                pasteRunning = false;
+                PASTE_RUNNING.set(false);
                 done.completeExceptionally(throwable);
             }
         }, 0L, 1L);
 
-        return done.whenComplete((_, _) -> pasteRunning = false);
+        return done.whenComplete((_, _) -> PASTE_RUNNING.set(false)).orTimeout(10, TimeUnit.MINUTES);
     }
 
     private static void pasteChunk(PolarChunk chunk, Setter setter, Vector3i pasteOffset, Rotation rotation,
@@ -114,7 +117,8 @@ public class Schematic {
     }
 
     private static void finishPaste(PolarWorld polarWorld, Setter setter, Vector3i pasteOffset, Rotation rotation,
-                                    Vector3i offset, Map<Vector3i, PolarChunk.BlockEntity> blockEntityMap) {
+                                    Vector3i offset, Map<Vector3i, PolarChunk.BlockEntity> blockEntityMap,
+                                    Runnable afterRefresh) {
         Bukkit.getScheduler().runTask(PolarPaper.getPlugin(), () -> {
             for (Map.Entry<Vector3i, PolarChunk.BlockEntity> entry : blockEntityMap.entrySet()) {
                 Vector3i blockOffset = entry.getKey();
@@ -140,6 +144,7 @@ public class Schematic {
             }
 
             if (setter instanceof Setter.World worldSetter) worldSetter.refreshChunks(chunksToRefresh);
+            afterRefresh.run();
         });
     }
 

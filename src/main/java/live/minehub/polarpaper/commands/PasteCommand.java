@@ -152,7 +152,8 @@ public class PasteCommand extends PolarCmd {
                             .append(Component.text(ms, NamedTextColor.AQUA))
                             .append(Component.text("ms", NamedTextColor.AQUA))
             );
-        }).join();
+        });
+
         return Command.SINGLE_SUCCESS;
     }
 

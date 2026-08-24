@@ -250,11 +250,12 @@ public class PolarWorld {
             Config config, boolean loadChunks) {
         Iterator<Long> remaining = chunkIndexes.iterator();
         CompletableFuture<Void> allScheduled = new CompletableFuture<>();
-
-        Bukkit.getScheduler().runTaskTimer(polarWorldAccess.getPlugin(), new Runnable() {
+        org.bukkit.scheduler.BukkitTask[] holder = new org.bukkit.scheduler.BukkitTask[1];
+        holder[0] = Bukkit.getScheduler().runTaskTimer(polarWorldAccess.getPlugin(), new Runnable() {
             @Override
             public void run() {
                 if (!polarWorldAccess.getPlugin().isEnabled()) {
+                    holder[0].cancel();
                     allScheduled.completeExceptionally(
                             new IllegalStateException("Plugin disabled while the autosave snapshot was being scheduled"));
                     return;
@@ -264,12 +265,14 @@ public class PolarWorld {
                 try {
                     while (System.nanoTime() < deadline) {
                         if (!remaining.hasNext()) {
+                            holder[0].cancel();
                             allScheduled.complete(null);
                             return;
                         }
                         futures.add(convertLogged(world, remaining.next(), polarWorldAccess, blockSelector, config, loadChunks));
                     }
                 } catch (Throwable throwable) {
+                    holder[0].cancel();
                     LOGGER.error("Could not schedule chunk snapshots for {}", world.getKey(), throwable);
                     allScheduled.completeExceptionally(throwable);
                 }

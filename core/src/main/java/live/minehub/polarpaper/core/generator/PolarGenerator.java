@@ -11,6 +11,8 @@ import live.minehub.polarpaper.core.world.PolarWorldAccess;
 import net.kyori.adventure.text.Component;
 import org.bukkit.Location;
 import org.bukkit.World;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import org.bukkit.generator.ChunkGenerator;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -89,6 +91,16 @@ public abstract class PolarGenerator extends ChunkGenerator {
         Location spawn = getConfig().spawn().clone();
         spawn.setWorld(world);
         return spawn;
+    }
+
+    private final Map<String, Boolean> gameruleDecisions = new ConcurrentHashMap<>();
+
+    public boolean gameruleEnabled(@NotNull String key, boolean fallback) {
+        return this.gameruleDecisions.computeIfAbsent(key,
+                _ -> {
+                    Object value = this.getConfig().gamerules().get(key);
+                    return value instanceof Boolean enabled ? enabled : fallback;
+                });
     }
 
     public static @Nullable PolarGenerator fromWorld(World world) {

@@ -29,30 +29,21 @@ public class PolarListener implements Listener {
     public void onBlockFade(BlockFadeEvent event) {
         PolarGenerator generator = PolarGenerator.fromWorld(event.getBlock().getWorld());
         if (generator == null) return;
-        Config config = generator.getConfig();
-        Object enabled = config.gamerules().get("blockFade");
-        if (!(enabled instanceof Boolean enabledBool)) return;
-        event.setCancelled(!enabledBool);
+        event.setCancelled(!generator.gameruleEnabled("blockFade", false));
     }
 
     @EventHandler(ignoreCancelled = true)
     public void onBlockFromTo(BlockFromToEvent event) {
         PolarGenerator generator = PolarGenerator.fromWorld(event.getBlock().getWorld());
         if (generator == null) return;
-        Config config = generator.getConfig();
-        Object enabled = config.gamerules().getOrDefault("liquidPhysics", true);
-        if (!(enabled instanceof Boolean enabledBool)) return;
-        event.setCancelled(!enabledBool);
+        event.setCancelled(!generator.gameruleEnabled("liquidPhysics", true));
     }
 
     @EventHandler(ignoreCancelled = true)
     public void onBlockPhysics(BlockPhysicsEvent event) {
         PolarGenerator generator = PolarGenerator.fromWorld(event.getBlock().getWorld());
         if (generator == null) return;
-        Config config = generator.getConfig();
-        Object enabled = config.gamerules().getOrDefault("blockPhysics", true);
-        if (!(enabled instanceof Boolean enabledBool)) return;
-        event.setCancelled(!enabledBool);
+        event.setCancelled(!generator.gameruleEnabled("blockPhysics", true));
     }
 
     @EventHandler(ignoreCancelled = true)
@@ -61,10 +52,7 @@ public class PolarListener implements Listener {
 
         PolarGenerator generator = PolarGenerator.fromWorld(event.getBlock().getWorld());
         if (generator == null) return;
-        Config config = generator.getConfig();
-        Object enabled = config.gamerules().getOrDefault("blockGravity", true);
-        if (!(enabled instanceof Boolean enabledBool)) return;
-        event.setCancelled(!enabledBool);
+        event.setCancelled(!generator.gameruleEnabled("blockGravity", true));
     }
 
     @EventHandler(ignoreCancelled = true)

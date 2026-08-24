@@ -26,6 +26,7 @@ public final class PolarChunkArchive {
     private static final Logger LOGGER = LoggerFactory.getLogger(PolarChunkArchive.class);
 
     private static final long BYTES_PER_POSITION = 48L;
+    private static final int MAX_CACHED_BODY_BYTES = 64 * 1024 * 1024;
     private static final int POSITIONS_IN_MESSAGE = 4;
 
     private final Set<Long> positions = ConcurrentHashMap.newKeySet();
@@ -132,7 +133,9 @@ public final class PolarChunkArchive {
         }
 
         SourceIndex built = this.buildSourceIndex();
-        if (built != null) this.cachedSource = new CachedSource(current, stamp, built);
+        if (built != null && built.content().readableBytes() <= MAX_CACHED_BODY_BYTES) {
+            this.cachedSource = new CachedSource(current, stamp, built);
+        }
         return built;
     }
 
@@ -142,7 +145,8 @@ public final class PolarChunkArchive {
             return Files.getLastModifiedTime(file.path()).toMillis()
                     + (Files.size(file.path()) << 20);
         } catch (IOException exception) {
-            return System.nanoTime();
+            LOGGER.warn("Could not stat the archive source {}; caching is disabled until it is readable", file.path(), exception);
+            return Long.MIN_VALUE;
         }
     }
 
