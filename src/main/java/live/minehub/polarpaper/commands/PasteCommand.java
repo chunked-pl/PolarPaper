@@ -7,8 +7,9 @@ import com.mojang.brigadier.context.CommandContext;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
 import io.papermc.paper.command.brigadier.Commands;
 import live.minehub.polarpaper.core.generator.PolarGenerator;
+import live.minehub.polarpaper.core.util.TaskFutures;
+import live.minehub.polarpaper.PolarPaper;
 import live.minehub.polarpaper.core.world.PolarReader;
-import live.minehub.polarpaper.core.world.PolarWorld;
 import live.minehub.polarpaper.schematic.Rotation;
 import live.minehub.polarpaper.schematic.Schematic;
 import live.minehub.polarpaper.schematic.Setter;
@@ -111,47 +112,45 @@ public class PasteCommand extends PolarCmd {
             return Command.SINGLE_SUCCESS;
         }
 
-        PolarWorld polarWorld;
-        try {
+        return TaskFutures.runAsync(PolarPaper.getPlugin(), () -> {
             byte[] polarBytes;
             try {
                 polarBytes = Files.readAllBytes(path);
             } catch (IOException e) {
                 throw new RuntimeException(e);
             }
-            polarWorld = PolarReader.read(polarBytes);
-        } catch (Exception e) {
+            return PolarReader.read(polarBytes);
+        }).thenCompose(polarWorld -> TaskFutures.runSync(PolarPaper.getPlugin(), () -> {
+            Vector3i pasteOffset = player.getLocation().toVector().toVector3i();
+
+            try {
+                PolarGenerator targetGenerator = PolarGenerator.fromWorld(player.getWorld());
+                Setter setter = targetGenerator == null
+                        ? new Setter.World(player.getWorld())
+                        : new Setter.World(player.getWorld(), targetGenerator.getWorldBlockSelector());
+                Schematic.paste(polarWorld, setter, pasteOffset, rotation, ignoreAir);
+            } catch (Exception e) {
+                String errorMsg = "Failed to paste schematic, please check logs for error";
+                LOGGER.error(errorMsg, e);
+                ctx.getSource().getSender().sendMessage(Component.text(errorMsg, NamedTextColor.RED));
+                return Command.SINGLE_SUCCESS;
+            }
+
+            int ms = (int) ((System.nanoTime() - before) / 1_000_000);
+            ctx.getSource().getSender().sendMessage(
+                    Component.text()
+                            .append(Component.text("Pasted '", NamedTextColor.AQUA))
+                            .append(Component.text(worldName, NamedTextColor.AQUA))
+                            .append(Component.text("' in ", NamedTextColor.AQUA))
+                            .append(Component.text(ms, NamedTextColor.AQUA))
+                            .append(Component.text("ms", NamedTextColor.AQUA))
+            );
+            return Command.SINGLE_SUCCESS;
+        })).exceptionally(failure -> {
+            LOGGER.error("Failed to load world '" + worldName + ".polar'", failure);
             player.sendMessage(Component.text("Failed to load world '" + worldName + ".polar'", NamedTextColor.RED));
-            LOGGER.error("Failed to load world '" + worldName + ".polar'", e);
             return Command.SINGLE_SUCCESS;
-        }
-
-        Vector3i pasteOffset = player.getLocation().toVector().toVector3i();
-
-        try {
-            PolarGenerator targetGenerator = PolarGenerator.fromWorld(player.getWorld());
-            Setter setter = targetGenerator == null
-                    ? new Setter.World(player.getWorld())
-                    : new Setter.World(player.getWorld(), targetGenerator.getWorldBlockSelector());
-            Schematic.paste(polarWorld, setter, pasteOffset, rotation, ignoreAir);
-        } catch (Exception e) {
-            String errorMsg = "Failed to paste schematic, please check logs for error";
-            LOGGER.error(errorMsg, e);
-            ctx.getSource().getSender().sendMessage(Component.text(errorMsg, NamedTextColor.RED));
-            return Command.SINGLE_SUCCESS;
-        }
-
-        int ms = (int) ((System.nanoTime() - before) / 1_000_000);
-        ctx.getSource().getSender().sendMessage(
-                Component.text()
-                        .append(Component.text("Pasted '", NamedTextColor.AQUA))
-                        .append(Component.text(worldName, NamedTextColor.AQUA))
-                        .append(Component.text("' in ", NamedTextColor.AQUA))
-                        .append(Component.text(ms, NamedTextColor.AQUA))
-                        .append(Component.text("ms", NamedTextColor.AQUA))
-        );
-
-        return Command.SINGLE_SUCCESS;
+        }).join();
     }
 
     @Override

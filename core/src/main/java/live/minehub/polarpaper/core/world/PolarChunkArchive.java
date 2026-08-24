@@ -1,6 +1,7 @@
 package live.minehub.polarpaper.core.world;
 
 import io.netty.buffer.ByteBuf;
+import live.minehub.polarpaper.core.source.FilePolarSource;
 import live.minehub.polarpaper.core.source.PolarSource;
 import live.minehub.polarpaper.core.util.CoordConversion;
 import org.jetbrains.annotations.NotNull;
@@ -10,6 +11,8 @@ import org.jetbrains.annotations.Nullable;
 import org.jetbrains.annotations.Range;
 import org.jetbrains.annotations.Unmodifiable;
 
+import java.io.IOException;
+import java.nio.file.Files;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
@@ -28,8 +31,10 @@ public final class PolarChunkArchive {
     private final Set<Long> positions = ConcurrentHashMap.newKeySet();
     private final Set<Long> claimed = ConcurrentHashMap.newKeySet();
     private volatile @Nullable PolarSource source;
+    private volatile @Nullable CachedSource cachedSource;
 
     public void bindSource(@Nullable PolarSource source) {
+        if (this.source != source) this.cachedSource = null;
         this.source = source;
     }
 
@@ -117,6 +122,31 @@ public final class PolarChunkArchive {
     }
 
     private @Nullable SourceIndex readSourceIndex() {
+        PolarSource current = this.source;
+        if (current == null) return null;
+
+        long stamp = freshness(current);
+        CachedSource cached = this.cachedSource;
+        if (cached != null && cached.source() == current && cached.stamp() == stamp) {
+            return cached.index();
+        }
+
+        SourceIndex built = this.buildSourceIndex();
+        if (built != null) this.cachedSource = new CachedSource(current, stamp, built);
+        return built;
+    }
+
+    private static long freshness(PolarSource source) {
+        if (!(source instanceof FilePolarSource file)) return 0L;
+        try {
+            return Files.getLastModifiedTime(file.path()).toMillis()
+                    + (Files.size(file.path()) << 20);
+        } catch (IOException exception) {
+            return System.nanoTime();
+        }
+    }
+
+    private @Nullable SourceIndex buildSourceIndex() {
         PolarContentReader.Content content = this.openSource();
         if (content == null) return null;
 
@@ -201,6 +231,8 @@ public final class PolarChunkArchive {
             }
         }
     }
+
+    private record CachedSource(@NotNull PolarSource source, long stamp, @NotNull SourceIndex index) {}
 
     public record Snapshot(@NotNull PolarChunkArchive archive, @NotNull @Unmodifiable Set<Long> positions,
                            @Nullable SourceIndex source) {
