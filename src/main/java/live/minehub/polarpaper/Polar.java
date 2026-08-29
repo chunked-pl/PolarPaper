@@ -17,6 +17,7 @@ import net.kyori.adventure.text.format.NamedTextColor;
 import ca.spottedleaf.moonrise.patches.chunk_system.scheduling.NewChunkHolder;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.chunk.LevelChunk;
+import net.minecraft.world.level.chunk.LevelChunkSection;
 import org.bukkit.*;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.craftbukkit.CraftWorld;
@@ -217,9 +218,7 @@ public class Polar {
 
         Short version = generator.getVersion();
         Integer dataVersion = generator.getDataVersion();
-        ServerLevel level = ((CraftWorld) world).getHandle();
-        BlockSelector blockSelector = generator.getWorldBlockSelector();
-        int sectionCount = level.getSectionsCount();
+        int sectionCount = ((CraftWorld) world).getHandle().getSectionsCount();
 
         return CompletableFuture
                 .supplyAsync(() -> {
@@ -230,52 +229,89 @@ public class Polar {
                                 + " has archived chunks but was never read from polar data");
                     }
 
-                    PolarChunk chunk = PolarReader.readChunkBody(PolarDataConverter.DEFAULT, version, dataVersion,
+                    return PolarReader.readChunkBody(PolarDataConverter.DEFAULT, version, dataVersion,
                             Unpooled.wrappedBuffer(body), sectionCount, chunkX, chunkZ);
+                })
+                .thenCompose(chunk -> chunk == null
+                        ? CompletableFuture.completedFuture(false)
+                        : materialiseChunk(world, generator, chunk))
+                .whenComplete((installed, failure) -> {
+                    if (failure != null || !Boolean.TRUE.equals(installed)) {
+                        generator.getChunkArchive().abandon(chunkX, chunkZ);
+                    }
+                });
+    }
+
+    public static CompletableFuture<Boolean> installChunk(@NotNull World world, @NotNull PolarChunk chunk) {
+        PolarStreamingGenerator generator = streamingGeneratorOf(world);
+        if (generator == null) return CompletableFuture.completedFuture(false);
+        if (chunk.isEmpty()) return CompletableFuture.completedFuture(false);
+        return materialiseChunk(world, generator, chunk);
+    }
+
+    private static CompletableFuture<Boolean> materialiseChunk(@NotNull World world,
+                                                               @NotNull PolarStreamingGenerator generator,
+                                                               @NotNull PolarChunk chunk) {
+        ServerLevel level = ((CraftWorld) world).getHandle();
+        int chunkX = chunk.x();
+        int chunkZ = chunk.z();
+        if (chunk.sections().length != level.getSectionsCount()) {
+            return CompletableFuture.failedFuture(new IllegalArgumentException(
+                    "Chunk " + chunkX + " " + chunkZ + " holds " + chunk.sections().length
+                            + " sections but " + world.getKey() + " expects " + level.getSectionsCount()));
+        }
+
+        BlockSelector blockSelector = generator.getWorldBlockSelector();
+        return CompletableFuture
+                .supplyAsync(() -> {
                     NoUnloadLevelChunk levelChunk = chunk.createLevelChunk(level, blockSelector);
                     PolarStreamLoader.primeChunk(levelChunk);
-                    return new PreparedChunk(chunk, levelChunk);
+                    return levelChunk;
                 })
-                .thenCompose(prepared -> prepared == null
-                        ? CompletableFuture.completedFuture(false)
-                        : TaskFutures.runSync(PolarPaper.getPlugin(), () -> {
+                .thenCompose(levelChunk -> TaskFutures.runSync(PolarPaper.getPlugin(), () -> {
                     LevelChunk existing = PolarStreamLoader.liveChunkAt(level, chunkX, chunkZ);
                     if (existing != null) {
-
-                        PolarStreamLoader.replaceChunkBlocks(level, world, existing, prepared.levelChunk(),
-                                prepared.chunk(), generator.getWorldAccess(), blockSelector);
-                        retainChunk(world, chunkX, chunkZ);
-                        generator.clearPlaceholderChunk(chunkX, chunkZ);
-                        generator.getChunkArchive().release(chunkX, chunkZ);
-                        return true;
+                        PolarStreamLoader.replaceChunkBlocks(level, world, existing, levelChunk,
+                                chunk, generator.getWorldAccess(), blockSelector);
+                    } else {
+                        for (PolarChunk.BlockEntity blockEntity : chunk.blockEntities()) {
+                            if (!PolarStreamLoader.isBlockEntitySelected(blockEntity, blockSelector, chunkX, chunkZ)) continue;
+                            PolarStreamLoader.addBlockEntity(blockEntity, levelChunk);
+                        }
+                        levelChunk.tryMarkSaved();
+                        if (!PolarStreamLoader.insertChunk(level, levelChunk)) {
+                            LOGGER.warn("Could not expand the archived chunk at {} {} in {}, the chunk system already holds that position",
+                                    chunkX, chunkZ, world.getKey());
+                            return false;
+                        }
+                        generator.getWorldAccess().loadChunkData(world, levelChunk, chunk.userData(), blockSelector);
                     }
 
-                    for (PolarChunk.BlockEntity blockEntity : prepared.chunk().blockEntities()) {
-                        if (!PolarStreamLoader.isBlockEntitySelected(blockEntity, blockSelector, chunkX, chunkZ)) continue;
-                        PolarStreamLoader.addBlockEntity(blockEntity, prepared.levelChunk());
-                    }
-                    prepared.levelChunk().tryMarkSaved();
-                    if (!PolarStreamLoader.insertChunk(level, prepared.levelChunk())) {
-                        LOGGER.warn("Could not expand the archived chunk at {} {} in {}, the chunk system already holds that position",
-                                chunkX, chunkZ, world.getKey());
-
-                        generator.getChunkArchive().abandon(chunkX, chunkZ);
-                        return false;
-                    }
-                    generator.getWorldAccess().loadChunkData(world, prepared.levelChunk(), prepared.chunk().userData(), blockSelector);
                     retainChunk(world, chunkX, chunkZ);
                     generator.clearPlaceholderChunk(chunkX, chunkZ);
                     generator.getChunkArchive().release(chunkX, chunkZ);
                     return true;
-                }))
-                .whenComplete((_, failure) -> {
-                    if (failure != null) generator.getChunkArchive().abandon(chunkX, chunkZ);
-                });
+                }));
     }
 
     public static boolean isChunkArchived(@NotNull World world, int chunkX, int chunkZ) {
         PolarStreamingGenerator generator = streamingGeneratorOf(world);
         return generator != null && generator.getChunkArchive().contains(chunkX, chunkZ);
+    }
+
+    public static boolean isChunkPresent(@NotNull World world, int chunkX, int chunkZ) {
+        if (isChunkArchived(world, chunkX, chunkZ)) return true;
+        return PolarStreamLoader.liveChunkAt(((CraftWorld) world).getHandle(), chunkX, chunkZ) != null;
+    }
+
+    public static boolean isChunkLive(@NotNull World world, int chunkX, int chunkZ) {
+        LevelChunk live = PolarStreamLoader.liveChunkAt(((CraftWorld) world).getHandle(), chunkX, chunkZ);
+        if (live == null) return false;
+
+        for (LevelChunkSection section : live.getSections()) {
+            if (!section.hasOnlyAir()) return true;
+        }
+        return false;
     }
 
     @SuppressWarnings("UnusedReturnValue")
@@ -311,9 +347,6 @@ public class Polar {
 
     private static void retainChunk(@NotNull World world, int chunkX, int chunkZ) {
         PolarStreamLoader.retainChunk(PolarPaper.getPlugin(), world, chunkX, chunkZ);
-    }
-
-    private record PreparedChunk(PolarChunk chunk, NoUnloadLevelChunk levelChunk) {
     }
 
     private static void finishLoading(@NotNull World world, @NotNull Config config) {
