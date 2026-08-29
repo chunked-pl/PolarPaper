@@ -36,6 +36,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Function;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -273,25 +274,57 @@ public class Polar {
                     if (existing != null) {
                         PolarStreamLoader.replaceChunkBlocks(level, world, existing, levelChunk,
                                 chunk, generator.getWorldAccess(), blockSelector);
-                    } else {
-                        for (PolarChunk.BlockEntity blockEntity : chunk.blockEntities()) {
-                            if (!PolarStreamLoader.isBlockEntitySelected(blockEntity, blockSelector, chunkX, chunkZ)) continue;
-                            PolarStreamLoader.addBlockEntity(blockEntity, levelChunk);
-                        }
-                        levelChunk.tryMarkSaved();
-                        if (!PolarStreamLoader.insertChunk(level, levelChunk)) {
-                            LOGGER.warn("Could not expand the archived chunk at {} {} in {}, the chunk system already holds that position",
-                                    chunkX, chunkZ, world.getKey());
-                            return false;
-                        }
-                        generator.getWorldAccess().loadChunkData(world, levelChunk, chunk.userData(), blockSelector);
+                        finishChunk(world, generator, chunkX, chunkZ);
+                        return CompletableFuture.completedFuture(true);
                     }
 
-                    retainChunk(world, chunkX, chunkZ);
-                    generator.clearPlaceholderChunk(chunkX, chunkZ);
-                    generator.getChunkArchive().release(chunkX, chunkZ);
+                    for (PolarChunk.BlockEntity blockEntity : chunk.blockEntities()) {
+                        if (!PolarStreamLoader.isBlockEntitySelected(blockEntity, blockSelector, chunkX, chunkZ)) continue;
+                        PolarStreamLoader.addBlockEntity(blockEntity, levelChunk);
+                    }
+                    levelChunk.tryMarkSaved();
+                    if (PolarStreamLoader.insertChunk(level, levelChunk)) {
+                        generator.getWorldAccess().loadChunkData(world, levelChunk, chunk.userData(), blockSelector);
+                        finishChunk(world, generator, chunkX, chunkZ);
+                        return CompletableFuture.completedFuture(true);
+                    }
+
+                    return overwriteWhenLoaded(world, generator, chunk, levelChunk, blockSelector);
+                }).thenCompose(Function.identity()));
+    }
+
+    private static CompletableFuture<Boolean> overwriteWhenLoaded(@NotNull World world,
+                                                                  @NotNull PolarStreamingGenerator generator,
+                                                                  @NotNull PolarChunk chunk,
+                                                                  @NotNull NoUnloadLevelChunk levelChunk,
+                                                                  @NotNull BlockSelector blockSelector) {
+        int chunkX = chunk.x();
+        int chunkZ = chunk.z();
+        LOGGER.warn("The chunk system holds {} {} in {} without a loaded chunk, waiting for it before writing the stored blocks",
+                chunkX, chunkZ, world.getKey());
+
+        return world.getChunkAtAsync(chunkX, chunkZ, true)
+                .thenCompose(_ -> TaskFutures.runSync(PolarPaper.getPlugin(), () -> {
+                    ServerLevel level = ((CraftWorld) world).getHandle();
+                    LevelChunk loaded = PolarStreamLoader.liveChunkAt(level, chunkX, chunkZ);
+                    if (loaded == null) {
+                        LOGGER.error("The chunk system never produced a chunk at {} {} in {}, the stored blocks stay in the archive",
+                                chunkX, chunkZ, world.getKey());
+                        return false;
+                    }
+
+                    PolarStreamLoader.replaceChunkBlocks(level, world, loaded, levelChunk,
+                            chunk, generator.getWorldAccess(), blockSelector);
+                    finishChunk(world, generator, chunkX, chunkZ);
                     return true;
                 }));
+    }
+
+    private static void finishChunk(@NotNull World world, @NotNull PolarStreamingGenerator generator,
+                                    int chunkX, int chunkZ) {
+        retainChunk(world, chunkX, chunkZ);
+        generator.clearPlaceholderChunk(chunkX, chunkZ);
+        generator.getChunkArchive().release(chunkX, chunkZ);
     }
 
     public static boolean isChunkArchived(@NotNull World world, int chunkX, int chunkZ) {

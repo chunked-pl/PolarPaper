@@ -263,7 +263,13 @@ public class PolarStreamLoader {
                     if (!insertChunk(serverLevel, newLevelChunk)) {
                         LevelChunk occupying = liveChunkAt(serverLevel, chunkX, chunkZ);
                         if (occupying == null) {
-                            LOGGER.warn("Dropped the stored chunk at {} {} in {}, the chunk system claimed that position mid-load",
+                            if (archive == null) {
+                                LOGGER.error("Dropped the stored chunk at {} {} in {}, the chunk system claimed that position mid-load and there is no archive to keep it in",
+                                        chunkX, chunkZ, world.getKey());
+                                return null;
+                            }
+                            archive.markArchived(chunkX, chunkZ);
+                            LOGGER.warn("Kept the chunk at {} {} in {} archived, the chunk system claimed that position mid-load",
                                     chunkX, chunkZ, world.getKey());
                             return null;
                         }
