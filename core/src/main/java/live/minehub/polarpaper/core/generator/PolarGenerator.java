@@ -11,23 +11,23 @@ import live.minehub.polarpaper.core.world.PolarWorldAccess;
 import net.kyori.adventure.text.Component;
 import org.bukkit.Location;
 import org.bukkit.World;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import org.bukkit.generator.ChunkGenerator;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.jetbrains.annotations.Unmodifiable;
 
+import java.util.Map;
 import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 public abstract class PolarGenerator extends ChunkGenerator {
-    private Config config;
-    private @Nullable PolarSource source;
+    private volatile Config config;
+    private volatile @Nullable PolarSource source;
     private final PolarWorldAccess worldAccess;
     private final PolarChunkArchive chunkArchive = new PolarChunkArchive();
     private final Set<Long> placeholderChunks = ConcurrentHashMap.newKeySet();
+    private final Map<String, Boolean> gameruleDecisions = new ConcurrentHashMap<>();
 
     public PolarGenerator(Config config, @Nullable PolarSource source, PolarWorldAccess worldAccess) {
         this.config = config;
@@ -41,6 +41,7 @@ public abstract class PolarGenerator extends ChunkGenerator {
 
     public void setConfig(Config config) {
         this.config = config;
+        this.gameruleDecisions.clear();
     }
 
     public @Nullable PolarSource getSource() {
@@ -92,8 +93,6 @@ public abstract class PolarGenerator extends ChunkGenerator {
         spawn.setWorld(world);
         return spawn;
     }
-
-    private final Map<String, Boolean> gameruleDecisions = new ConcurrentHashMap<>();
 
     public boolean gameruleEnabled(@NotNull String key, boolean fallback) {
         return this.gameruleDecisions.computeIfAbsent(key,

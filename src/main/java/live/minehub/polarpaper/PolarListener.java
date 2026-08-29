@@ -57,7 +57,7 @@ public class PolarListener implements Listener {
 
     @EventHandler(ignoreCancelled = true)
     public void onWorldUnload(WorldUnloadEvent event) {
-        Polar.stopAutoSaveTask(event.getWorld().getKey());
+        Polar.forgetWorld(event.getWorld().getKey());
     }
 
     @EventHandler(ignoreCancelled = true)

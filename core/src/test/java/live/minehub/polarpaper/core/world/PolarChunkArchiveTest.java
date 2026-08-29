@@ -12,7 +12,6 @@ import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 import static live.minehub.polarpaper.core.util.ByteArrayUtil.getVarInt;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -121,49 +120,17 @@ final class PolarChunkArchiveTest {
     }
 
     @Test
-    void returnsAChunkThatStoppedBeingLiveToTheArchive() {
+    void dropsAChunkThatWasDeliberatelyRemovedFromTheWorld() {
         Fixture fixture = Fixture.build();
         long position = fixture.anyArchived();
         fixture.goLive(position);
         fixture.live.remove(position);
 
-        Map<Long, byte[]> written = bodies(fixture.saveKeepingOrphans());
+        Map<Long, byte[]> written = bodies(fixture.save());
 
-        assertEquals(fixture.original.size(), written.size(),
-                "a chunk that left the archive and stopped being live was dropped from the file");
-        assertArrayEquals(fixture.original.get(position), written.get(position),
-                "the recovered chunk came back as something other than what it was");
-        assertTrue(fixture.archive.contains(CoordConversion.chunkX(position), CoordConversion.chunkZ(position)),
-                "the recovered chunk was kept only for one save and not returned to the live archive");
-        assertArrayEquals(fixture.original.get(position),
-                fixture.archive.claim(CoordConversion.chunkX(position), CoordConversion.chunkZ(position)),
-                "the recovered chunk could not be expanded again without reloading the world");
-    }
-
-    @Test
-    void keepsARecoveredChunkAcrossLaterSaves() {
-        Fixture fixture = Fixture.build();
-        long position = fixture.anyArchived();
-        fixture.goLive(position);
-        fixture.live.remove(position);
-
-        fixture.saveKeepingOrphans();
-        Map<Long, byte[]> writtenAgain = bodies(fixture.save());
-
-        assertArrayEquals(fixture.original.get(position), writtenAgain.get(position),
-                "a recovered chunk survived only the save that first noticed it");
-    }
-
-    @Test
-    void doesNotRecoverAChunkThatTheLiveWorldStillCovers() {
-        Fixture fixture = Fixture.build();
-        long position = fixture.anyArchived();
-        fixture.goLive(position);
-
-        fixture.saveKeepingOrphans();
-
-        assertFalse(fixture.archive.contains(CoordConversion.chunkX(position), CoordConversion.chunkZ(position)),
-                "a live chunk was duplicated back into the archive");
+        assertFalse(written.containsKey(position),
+                "a chunk removed from the world was resurrected from the old file");
+        assertEquals(fixture.original.size() - 1, written.size());
     }
 
     @Test
@@ -262,10 +229,6 @@ final class PolarChunkArchiveTest {
 
         byte[] save() {
             return this.save(this.archive.snapshot());
-        }
-
-        byte[] saveKeepingOrphans() {
-            return this.save(this.archive.snapshotIncluding(this.archive.snapshot(), Set.copyOf(this.live)));
         }
 
         byte[] save(PolarChunkArchive.Snapshot snapshot) {

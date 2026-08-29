@@ -77,46 +77,51 @@ public final class PolarPaper extends JavaPlugin {
             PolarGenerator generator = PolarGenerator.fromWorld(world);
             if (generator == null) continue;
 
-            Path worldFolderPath = world.getWorldFolder().toPath();
-            if (Files.exists(worldFolderPath)) {
-                getLogger().info("Clearing temp files for " + world.getKey().getKey());
-                try (Stream<Path> paths = Files.walk(worldFolderPath)) {
-                    paths.sorted(Comparator.reverseOrder()).map(Path::toFile).forEach(File::delete);
-                } catch (IOException e) {
-                    getLogger().warning("Failed to delete temp files for " + world.getKey().getKey());
-                    StringWriter sw = new StringWriter();
-                    e.printStackTrace(new PrintWriter(sw));
-                    String exceptionAsString = sw.toString();
-                    getLogger().warning(exceptionAsString);
-                }
-            }
-
-            if (!generator.getConfig().saveOnStop()) {
-                getLogger().info(String.format("Not saving '%s' as it has save on stop disabled", world.getKey().getKey()));
-                continue;
-            }
-            if (Polar.isLoading(world.getKey())) {
-                getLogger().info(String.format("Not saving '%s' as it was not fully loaded", world.getKey().getKey()));
-                continue;
-            }
-
-            getLogger().info("Saving '" + world.getKey().getKey() + "'...");
-
-            long before = System.nanoTime();
-            try {
-                Polar.updateConfig(world, world.getKey().getKey());
-                Polar.saveWorldSynchronously(world);
-            } catch (Exception e) {
-
-                getLogger().log(java.util.logging.Level.SEVERE,
-                        "Failed to save '" + world.getKey().getKey() + "' while stopping, its previous file is untouched", e);
-                continue;
-            }
-            int ms = (int) ((System.nanoTime() - before) / 1_000_000);
-            getLogger().info(String.format("Saved '%s' in %sms", world.getKey().getKey(), ms));
+            saveOnStop(world, generator);
+            clearTempFiles(world);
         }
 
         Polar.flushPendingConfig();
+    }
+
+    private void saveOnStop(World world, PolarGenerator generator) {
+        if (!generator.getConfig().saveOnStop()) {
+            getLogger().info(String.format("Not saving '%s' as it has save on stop disabled", world.getKey().getKey()));
+            return;
+        }
+        if (Polar.isLoading(world.getKey())) {
+            getLogger().info(String.format("Not saving '%s' as it was not fully loaded", world.getKey().getKey()));
+            return;
+        }
+
+        getLogger().info("Saving '" + world.getKey().getKey() + "'...");
+
+        long before = System.nanoTime();
+        try {
+            Polar.updateConfig(world, world.getKey().getKey());
+            Polar.saveWorldSynchronously(world);
+        } catch (Exception e) {
+            getLogger().log(java.util.logging.Level.SEVERE,
+                    "Failed to save '" + world.getKey().getKey() + "' while stopping, its previous file is untouched", e);
+            return;
+        }
+        int ms = (int) ((System.nanoTime() - before) / 1_000_000);
+        getLogger().info(String.format("Saved '%s' in %sms", world.getKey().getKey(), ms));
+    }
+
+    private void clearTempFiles(World world) {
+        Path worldFolderPath = world.getWorldFolder().toPath();
+        if (!Files.exists(worldFolderPath)) return;
+
+        getLogger().info("Clearing temp files for " + world.getKey().getKey());
+        try (Stream<Path> paths = Files.walk(worldFolderPath)) {
+            paths.sorted(Comparator.reverseOrder()).map(Path::toFile).forEach(File::delete);
+        } catch (IOException e) {
+            getLogger().warning("Failed to delete temp files for " + world.getKey().getKey());
+            StringWriter sw = new StringWriter();
+            e.printStackTrace(new PrintWriter(sw));
+            getLogger().warning(sw.toString());
+        }
     }
 
     public static PolarPaper getPlugin() {

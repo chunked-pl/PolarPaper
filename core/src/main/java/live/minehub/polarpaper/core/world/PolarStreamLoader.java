@@ -243,10 +243,11 @@ public class PolarStreamLoader {
         NoUnloadLevelChunk newLevelChunk = new NoUnloadLevelChunk(serverLevel, chunkPos, UpgradeData.EMPTY, new LevelChunkTicks<>(), new LevelChunkTicks<>(), 0L, levelChunkSections, null, null);
 
         int blockEntityCount = getVarInt(bb);
+        List<PolarChunk.BlockEntity> blockEntities = new ArrayList<>(blockEntityCount);
         for (int i = 0; i < blockEntityCount; i++) {
             PolarChunk.BlockEntity polarBlockEntity = PolarReader.readBlockEntity(dataConverter, dataVersion, bb);
             if (!isBlockEntitySelected(polarBlockEntity, blockSelector, chunkX, chunkZ)) continue;
-            addBlockEntity(polarBlockEntity, newLevelChunk);
+            blockEntities.add(polarBlockEntity);
         }
 
         PolarReader.skipHeightmaps(bb);
@@ -255,10 +256,20 @@ public class PolarStreamLoader {
 
         return prepareChunkAsync(newLevelChunk).thenCompose(_ ->
                 TaskFutures.runSync(plugin, () -> {
+                    for (PolarChunk.BlockEntity blockEntity : blockEntities) {
+                        addBlockEntity(blockEntity, newLevelChunk);
+                    }
                     newLevelChunk.tryMarkSaved();
                     if (!insertChunk(serverLevel, newLevelChunk)) {
-                        LOGGER.warn("Dropped the stored chunk at {} {} in {}, the chunk system already holds that position",
-                                chunkX, chunkZ, world.getKey());
+                        LevelChunk occupying = liveChunkAt(serverLevel, chunkX, chunkZ);
+                        if (occupying == null) {
+                            LOGGER.warn("Dropped the stored chunk at {} {} in {}, the chunk system claimed that position mid-load",
+                                    chunkX, chunkZ, world.getKey());
+                            return null;
+                        }
+                        replaceChunkBlocks(serverLevel, world, occupying, newLevelChunk,
+                                blockEntities, userData, worldAccess, blockSelector);
+                        retainChunk(plugin, world, chunkX, chunkZ);
                         return null;
                     }
                     retainChunk(plugin, world, chunkX, chunkZ);
@@ -268,7 +279,16 @@ public class PolarStreamLoader {
                 }));
     }
 
+    public static @Nullable LevelChunk liveChunkAt(@NotNull ServerLevel level, int chunkX, int chunkZ) {
+        NewChunkHolder holder = level.moonrise$getChunkTaskScheduler().chunkHolderManager.getChunkHolder(chunkX, chunkZ);
+        return holder != null && holder.getCurrentChunk() instanceof LevelChunk chunk ? chunk : null;
+    }
+
     public static void retainChunk(@NotNull Plugin plugin, @NotNull World world, int chunkX, int chunkZ) {
+        if (Bukkit.isPrimaryThread()) {
+            world.addPluginChunkTicket(chunkX, chunkZ, plugin);
+            return;
+        }
         Bukkit.getScheduler().runTask(plugin, () -> world.addPluginChunkTicket(chunkX, chunkZ, plugin));
     }
 
@@ -308,6 +328,18 @@ public class PolarStreamLoader {
                                            @NotNull LevelChunk target, @NotNull LevelChunk source,
                                            @NotNull PolarChunk polarChunk, @NotNull PolarWorldAccess worldAccess,
                                            @NotNull BlockSelector blockSelector) {
+        List<PolarChunk.BlockEntity> blockEntities = new ArrayList<>(polarChunk.blockEntities().length);
+        for (PolarChunk.BlockEntity blockEntity : polarChunk.blockEntities()) {
+            if (!isBlockEntitySelected(blockEntity, blockSelector, polarChunk.x(), polarChunk.z())) continue;
+            blockEntities.add(blockEntity);
+        }
+        replaceChunkBlocks(serverLevel, world, target, source, blockEntities, polarChunk.userData(), worldAccess, blockSelector);
+    }
+
+    public static void replaceChunkBlocks(@NotNull ServerLevel serverLevel, @NotNull World world,
+                                           @NotNull LevelChunk target, @NotNull LevelChunk source,
+                                           @NotNull List<PolarChunk.BlockEntity> blockEntities, byte @NotNull [] userData,
+                                           @NotNull PolarWorldAccess worldAccess, @NotNull BlockSelector blockSelector) {
         LevelChunkSection[] targetSections = target.getSections();
         LevelChunkSection[] sourceSections = source.getSections();
         if (targetSections.length != sourceSections.length) {
@@ -318,11 +350,10 @@ public class PolarStreamLoader {
 
         Heightmap.primeHeightmaps(target, ChunkStatus.FULL.heightmapsAfter());
 
-        for (PolarChunk.BlockEntity blockEntity : polarChunk.blockEntities()) {
-            if (!isBlockEntitySelected(blockEntity, blockSelector, polarChunk.x(), polarChunk.z())) continue;
+        for (PolarChunk.BlockEntity blockEntity : blockEntities) {
             addBlockEntity(blockEntity, target);
         }
-        worldAccess.loadChunkData(world, target, polarChunk.userData(), blockSelector);
+        worldAccess.loadChunkData(world, target, userData, blockSelector);
 
         relight(serverLevel, target);
         world.refreshChunk(target.locX, target.locZ);
@@ -391,6 +422,12 @@ public class PolarStreamLoader {
     }
 
     private static ChunkEntitySlices initializeEntityChunk(NewChunkHolder holder) {
+        ChunkEntitySlices existing = (ChunkEntitySlices) ENTITY_CHUNK_HANDLE.get(holder);
+        if (existing != null) {
+            existing.setTransient(false);
+            return existing;
+        }
+
         ChunkEntitySlices slices = new ChunkEntitySlices(
                 holder.world, holder.chunkX, holder.chunkZ, holder.getChunkStatus(),
                 holder.holderData, WorldUtil.getMinSection(holder.world), WorldUtil.getMaxSection(holder.world)

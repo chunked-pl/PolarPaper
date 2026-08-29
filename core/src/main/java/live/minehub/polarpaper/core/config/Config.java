@@ -182,11 +182,7 @@ public record Config(
 
         public Builder fromWorld(World world) {
 
-            Location spawn = world.getSpawnLocation().clone();
-            spawn.setWorld(null);
-
             this.time(world.getTime())
-                    .spawn(spawn)
                     .difficulty(world.getDifficulty())
                     .environment(world.getEnvironment());
 

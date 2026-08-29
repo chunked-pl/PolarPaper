@@ -19,14 +19,14 @@ public class WorldKey {
         Path pluginFolder = PolarPaper.getPlugin().getDataPath();
         Path worldsFolder = pluginFolder.resolve("worlds");
         return worldsFolder.toAbsolutePath().relativize(path.toAbsolutePath()).toString()
-                .replaceAll(".polar$", "")
+                .replaceAll("\\.polar$", "")
                 .replace(" ", "_")
                 .toLowerCase();
     }
 
     public static @Nullable World getWorld(String worldName) {
         worldName = worldName
-                .replaceAll(".polar$", "")
+                .replaceAll("\\.polar$", "")
                 .replace(" ", "_")
                 .toLowerCase();
 

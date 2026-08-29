@@ -1,18 +1,13 @@
 package live.minehub.polarpaper.core.world;
 
 import io.netty.buffer.ByteBuf;
-import live.minehub.polarpaper.core.source.FilePolarSource;
 import live.minehub.polarpaper.core.source.PolarSource;
 import live.minehub.polarpaper.core.util.CoordConversion;
 import org.jetbrains.annotations.NotNull;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.jetbrains.annotations.Nullable;
 import org.jetbrains.annotations.Range;
 import org.jetbrains.annotations.Unmodifiable;
 
-import java.io.IOException;
-import java.nio.file.Files;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
@@ -23,19 +18,14 @@ import static live.minehub.polarpaper.core.util.ByteArrayUtil.getVarInt;
 
 public final class PolarChunkArchive {
 
-    private static final Logger LOGGER = LoggerFactory.getLogger(PolarChunkArchive.class);
-
     private static final long BYTES_PER_POSITION = 48L;
-    private static final int MAX_CACHED_BODY_BYTES = 64 * 1024 * 1024;
     private static final int POSITIONS_IN_MESSAGE = 4;
 
     private final Set<Long> positions = ConcurrentHashMap.newKeySet();
     private final Set<Long> claimed = ConcurrentHashMap.newKeySet();
     private volatile @Nullable PolarSource source;
-    private volatile @Nullable CachedSource cachedSource;
 
     public void bindSource(@Nullable PolarSource source) {
-        if (this.source != source) this.cachedSource = null;
         this.source = source;
     }
 
@@ -97,57 +87,7 @@ public final class PolarChunkArchive {
     }
 
     public @NotNull Snapshot snapshot() {
-        return new Snapshot(this, Set.copyOf(this.positions), null);
-    }
-
-    public @NotNull Snapshot snapshotIncluding(@NotNull Snapshot snapshot, @NotNull Set<Long> covered) {
-        SourceIndex index;
-        try {
-            index = this.readSourceIndex();
-        } catch (RuntimeException | Error failure) {
-            LOGGER.error("Could not read the chunks of the source file; saving without recovering any", failure);
-            return snapshot;
-        }
-        if (index == null) return snapshot;
-
-        Set<Long> orphans = new HashSet<>(index.slices().keySet());
-        orphans.removeAll(covered);
-        orphans.removeAll(snapshot.positions());
-        if (orphans.isEmpty()) return new Snapshot(this, snapshot.positions(), index);
-
-        LOGGER.warn("Recovering {} chunk(s) that the world no longer holds: {}", orphans.size(), describe(orphans));
-        this.positions.addAll(orphans);
-        Set<Long> widened = new HashSet<>(snapshot.positions());
-        widened.addAll(orphans);
-        return new Snapshot(this, Set.copyOf(widened), index);
-    }
-
-    private @Nullable SourceIndex readSourceIndex() {
-        PolarSource current = this.source;
-        if (current == null) return null;
-
-        long stamp = freshness(current);
-        CachedSource cached = this.cachedSource;
-        if (cached != null && cached.source() == current && cached.stamp() == stamp) {
-            return cached.index();
-        }
-
-        SourceIndex built = this.buildSourceIndex();
-        if (built != null && built.content().readableBytes() <= MAX_CACHED_BODY_BYTES) {
-            this.cachedSource = new CachedSource(current, stamp, built);
-        }
-        return built;
-    }
-
-    private static long freshness(PolarSource source) {
-        if (!(source instanceof FilePolarSource file)) return 0L;
-        try {
-            return Files.getLastModifiedTime(file.path()).toMillis()
-                    + (Files.size(file.path()) << 20);
-        } catch (IOException exception) {
-            LOGGER.warn("Could not stat the archive source {}; caching is disabled until it is readable", file.path(), exception);
-            return Long.MIN_VALUE;
-        }
+        return new Snapshot(this, Set.copyOf(this.positions));
     }
 
     private @Nullable SourceIndex buildSourceIndex() {
@@ -185,7 +125,7 @@ public final class PolarChunkArchive {
     void readBodies(@NotNull @Unmodifiable Set<Long> wanted, @NotNull BodyReader out) {
         if (wanted.isEmpty()) return;
 
-        SourceIndex index = this.readSourceIndex();
+        SourceIndex index = this.buildSourceIndex();
         if (index == null) {
             throw new IllegalStateException(
                     "Archive holds " + wanted.size() + " chunks but has no source to read them from");
@@ -214,7 +154,7 @@ public final class PolarChunkArchive {
         void read(int chunkX, int chunkZ, @NotNull ByteBuf buffer, int offset, int length);
     }
 
-    record SourceIndex(@NotNull ByteBuf content, @NotNull Map<Long, int[]> slices) {
+    private record SourceIndex(@NotNull ByteBuf content, @NotNull Map<Long, int[]> slices) {
 
         void readBodies(@NotNull @Unmodifiable Set<Long> wanted, @NotNull BodyReader out) {
             Set<Long> missing = null;
@@ -236,12 +176,9 @@ public final class PolarChunkArchive {
         }
     }
 
-    private record CachedSource(@NotNull PolarSource source, long stamp, @NotNull SourceIndex index) {}
+    public record Snapshot(@NotNull PolarChunkArchive archive, @NotNull @Unmodifiable Set<Long> positions) {
 
-    public record Snapshot(@NotNull PolarChunkArchive archive, @NotNull @Unmodifiable Set<Long> positions,
-                           @Nullable SourceIndex source) {
-
-        public static final Snapshot EMPTY = new Snapshot(new PolarChunkArchive(), Set.of(), null);
+        public static final Snapshot EMPTY = new Snapshot(new PolarChunkArchive(), Set.of());
 
         public boolean isEmpty() {
             return this.positions.isEmpty();
@@ -249,11 +186,7 @@ public final class PolarChunkArchive {
 
         void readBodies(@NotNull @Unmodifiable Set<Long> wanted, @NotNull BodyReader out) {
             if (wanted.isEmpty()) return;
-            if (this.source == null) {
-                this.archive.readBodies(wanted, out);
-                return;
-            }
-            this.source.readBodies(wanted, out);
+            this.archive.readBodies(wanted, out);
         }
     }
 }

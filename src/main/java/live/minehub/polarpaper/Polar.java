@@ -38,6 +38,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 @SuppressWarnings("unused")
@@ -47,6 +48,7 @@ public class Polar {
 
     private static final Set<NamespacedKey> LOADING_WORLDS = new CopyOnWriteArraySet<>();
     private static final Map<NamespacedKey, BukkitTask> AUTOSAVE_TASK_MAP = new ConcurrentHashMap<>();
+    private static final Map<NamespacedKey, WorldSaveState> SAVE_STATES = new ConcurrentHashMap<>();
 
     private static final AtomicReference<String> PENDING_CONFIG = new AtomicReference<>();
     private static final AtomicBoolean CONFIG_WRITE_SCHEDULED = new AtomicBoolean();
@@ -73,6 +75,12 @@ public class Polar {
         } else {
             LOADING_WORLDS.remove(worldKey);
         }
+    }
+
+    public static void forgetWorld(NamespacedKey worldKey) {
+        stopAutoSaveTask(worldKey);
+        SAVE_STATES.remove(worldKey);
+        LOADING_WORLDS.remove(worldKey);
     }
 
     public static CompletableFuture<@Nullable World> createWorld(@Nullable PolarSource source, @NotNull String worldName) {
@@ -158,9 +166,16 @@ public class Polar {
                                 if (PolarStreamLoader.insertChunk(level, levelChunk)) {
                                     worldAccess.loadChunkData(world, levelChunk, chunk.userData(), blockSelector);
                                 } else {
-                                    LOGGER.warn("Dropped the stored chunk at {} {} in {}, the chunk system already holds that position",
-                                            chunk.x(), chunk.z(), worldName);
+                                    LevelChunk occupying = PolarStreamLoader.liveChunkAt(level, chunk.x(), chunk.z());
+                                    if (occupying == null) {
+                                        LOGGER.warn("Dropped the stored chunk at {} {} in {}, the chunk system claimed that position mid-load",
+                                                chunk.x(), chunk.z(), worldName);
+                                        return (Void) null;
+                                    }
+                                    PolarStreamLoader.replaceChunkBlocks(level, world, occupying, levelChunk,
+                                            chunk, worldAccess, blockSelector);
                                 }
+                                retainChunk(world, chunk.x(), chunk.z());
                                 return (Void) null;
                             }))
                             .whenComplete((_, ex) -> {
@@ -224,7 +239,7 @@ public class Polar {
                 .thenCompose(prepared -> prepared == null
                         ? CompletableFuture.completedFuture(false)
                         : TaskFutures.runSync(PolarPaper.getPlugin(), () -> {
-                    LevelChunk existing = liveChunkAt(level, chunkX, chunkZ);
+                    LevelChunk existing = PolarStreamLoader.liveChunkAt(level, chunkX, chunkZ);
                     if (existing != null) {
 
                         PolarStreamLoader.replaceChunkBlocks(level, world, existing, prepared.levelChunk(),
@@ -269,7 +284,7 @@ public class Polar {
         if (generator == null) return CompletableFuture.completedFuture(false);
 
         ServerLevel level = ((CraftWorld) world).getHandle();
-        if (liveChunkAt(level, chunkX, chunkZ) != null) return CompletableFuture.completedFuture(false);
+        if (PolarStreamLoader.liveChunkAt(level, chunkX, chunkZ) != null) return CompletableFuture.completedFuture(false);
 
         BlockSelector blockSelector = generator.getWorldBlockSelector();
         PolarChunk chunk = new PolarChunk(chunkX, chunkZ, level.getSectionsCount());
@@ -277,11 +292,11 @@ public class Polar {
 
         return PolarStreamLoader.prepareChunkAsync(levelChunk)
                 .thenCompose(_ -> TaskFutures.runSync(PolarPaper.getPlugin(), () -> {
-                    if (liveChunkAt(level, chunkX, chunkZ) != null) return false;
+                    if (PolarStreamLoader.liveChunkAt(level, chunkX, chunkZ) != null) return false;
 
                     levelChunk.tryMarkSaved();
 
-                    PolarStreamLoader.insertChunk(level, levelChunk);
+                    if (!PolarStreamLoader.insertChunk(level, levelChunk)) return false;
                     retainChunk(world, chunkX, chunkZ);
 
                     generator.markPlaceholderChunk(chunkX, chunkZ);
@@ -289,22 +304,9 @@ public class Polar {
                 }));
     }
 
-    private static @NotNull java.util.Set<Long> positionsOf(@NotNull PolarWorld polarWorld) {
-        java.util.Set<Long> positions = new java.util.HashSet<>();
-        for (PolarChunk chunk : polarWorld.chunks()) {
-            positions.add(live.minehub.polarpaper.core.util.CoordConversion.chunkIndex(chunk.x(), chunk.z()));
-        }
-        return positions;
-    }
-
     private static @Nullable PolarStreamingGenerator streamingGeneratorOf(@NotNull World world) {
         PolarGenerator generator = PolarGenerator.fromWorld(world);
         return generator instanceof PolarStreamingGenerator streaming ? streaming : null;
-    }
-
-    private static @Nullable LevelChunk liveChunkAt(@NotNull ServerLevel level, int chunkX, int chunkZ) {
-        NewChunkHolder holder = level.moonrise$getChunkTaskScheduler().chunkHolderManager.getChunkHolder(chunkX, chunkZ);
-        return holder != null && holder.getCurrentChunk() instanceof LevelChunk chunk ? chunk : null;
     }
 
     private static void retainChunk(@NotNull World world, int chunkX, int chunkZ) {
@@ -584,6 +586,7 @@ public class Polar {
             throw new IllegalStateException(world.getKey() + " is still loading");
         }
 
+        long generation = saveStateOf(world.getKey()).begin();
         Config config = generator.getConfig();
         BlockSelector blockSelector = generator.getWorldBlockSelector();
         PolarChunkArchive.Snapshot archiveSnapshot = generator.getChunkArchive().snapshot();
@@ -594,10 +597,12 @@ public class Polar {
                 world, generator.getWorldAccess(), blockSelector, config, extraChunks);
         polarWorld.userData(generator.getUserData());
         dropPlaceholderChunks(polarWorld, generator);
-        PolarChunkArchive.Snapshot keptSnapshot =
-                generator.getChunkArchive().snapshotIncluding(archiveSnapshot, positionsOf(polarWorld));
         PolarSource source = generator.getSource();
-        source.saveBytes(PolarWriter.write(polarWorld, PolarDataConverter.DEFAULT, keptSnapshot));
+        byte[] worldBytes = PolarWriter.write(polarWorld, PolarDataConverter.DEFAULT, archiveSnapshot);
+        if (!saveStateOf(world.getKey()).commit(generation, source, worldBytes)) {
+            LOGGER.info("Skipped writing '{}', a newer save already reached the disk", world.getKey().getKey());
+            return;
+        }
         generator.getChunkArchive().bindSource(source);
     }
 
@@ -610,6 +615,7 @@ public class Polar {
 
         PolarGenerator generator = PolarGenerator.fromWorld(world);
         byte[] worldUserData = generator == null ? new byte[0] : generator.getUserData();
+        long generation = saveStateOf(world.getKey()).begin();
         PolarChunkArchive.Snapshot archiveSnapshot = generator == null
                 ? PolarChunkArchive.Snapshot.EMPTY
                 : generator.getChunkArchive().snapshot();
@@ -621,20 +627,44 @@ public class Polar {
             return CompletableFuture.failedFuture(e);
         }
 
+        NamespacedKey worldKey = world.getKey();
         return future.thenAcceptAsync(newPolarWorld -> {
             newPolarWorld.userData(worldUserData);
             if (generator != null) dropPlaceholderChunks(newPolarWorld, generator);
-            PolarChunkArchive.Snapshot keptSnapshot = generator == null
-                    ? archiveSnapshot
-                    : generator.getChunkArchive().snapshotIncluding(archiveSnapshot, positionsOf(newPolarWorld));
-            byte[] worldBytes = PolarWriter.write(newPolarWorld, PolarDataConverter.DEFAULT, keptSnapshot);
+            byte[] worldBytes = PolarWriter.write(newPolarWorld, PolarDataConverter.DEFAULT, archiveSnapshot);
+            boolean written;
             try {
-                polarSource.saveBytes(worldBytes);
+                written = saveStateOf(worldKey).commit(generation, polarSource, worldBytes);
             } catch (Exception e) {
                 throw new RuntimeException(e);
             }
+            if (!written) {
+                LOGGER.info("Skipped writing '{}', a newer save already reached the disk", worldKey.getKey());
+                return;
+            }
             if (generator != null) generator.getChunkArchive().bindSource(polarSource);
         });
+    }
+
+    private static WorldSaveState saveStateOf(NamespacedKey worldKey) {
+        return SAVE_STATES.computeIfAbsent(worldKey, _ -> new WorldSaveState());
+    }
+
+    private static final class WorldSaveState {
+
+        private final AtomicLong generations = new AtomicLong();
+        private long writtenGeneration;
+
+        long begin() {
+            return this.generations.incrementAndGet();
+        }
+
+        synchronized boolean commit(long generation, PolarSource source, byte[] worldBytes) throws Exception {
+            if (generation <= this.writtenGeneration) return false;
+            source.saveBytes(worldBytes);
+            this.writtenGeneration = generation;
+            return true;
+        }
     }
 
 }

@@ -15,9 +15,10 @@ import org.jetbrains.annotations.Nullable;
 import org.joml.Vector3i;
 
 public class PolarStreamingGenerator extends PolarGenerator {
-    private Short version = null;
-    private Integer dataVersion = null;
-    private byte[] userData = new byte[0];
+    private volatile Short version = null;
+    private volatile Integer dataVersion = null;
+    private volatile byte[] userData = new byte[0];
+
     public PolarStreamingGenerator(Config config, PolarSource source, PolarWorldAccess worldAccess) {
         super(config, source, worldAccess);
     }
