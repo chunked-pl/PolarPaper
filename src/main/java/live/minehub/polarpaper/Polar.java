@@ -270,12 +270,8 @@ public class Polar {
                     return levelChunk;
                 })
                 .thenCompose(levelChunk -> TaskFutures.runSync(PolarPaper.getPlugin(), () -> {
-                    LevelChunk existing = PolarStreamLoader.liveChunkAt(level, chunkX, chunkZ);
-                    if (existing != null) {
-                        PolarStreamLoader.replaceChunkBlocks(level, world, existing, levelChunk,
-                                chunk, generator.getWorldAccess(), blockSelector);
-                        finishChunk(world, generator, chunkX, chunkZ);
-                        return CompletableFuture.completedFuture(true);
+                    if (PolarStreamLoader.holdsPosition(level, chunkX, chunkZ)) {
+                        return overwriteWhenLoaded(world, generator, chunk, levelChunk, blockSelector);
                     }
 
                     for (PolarChunk.BlockEntity blockEntity : chunk.blockEntities()) {
@@ -300,9 +296,6 @@ public class Polar {
                                                                   @NotNull BlockSelector blockSelector) {
         int chunkX = chunk.x();
         int chunkZ = chunk.z();
-        LOGGER.warn("The chunk system holds {} {} in {} without a loaded chunk, waiting for it before writing the stored blocks",
-                chunkX, chunkZ, world.getKey());
-
         return world.getChunkAtAsync(chunkX, chunkZ, true)
                 .thenCompose(_ -> TaskFutures.runSync(PolarPaper.getPlugin(), () -> {
                     ServerLevel level = ((CraftWorld) world).getHandle();

@@ -29,6 +29,7 @@ public class CommandManager {
                     .requires(source -> source.getSender().hasPermission("polarpaper.use"));
 
     public void register(Commands registrar) {
+        register(new ArchiveCommand());
         register(new BrowseCommand());
         register(new ConvertCommand());
         register(new CopyCommand());

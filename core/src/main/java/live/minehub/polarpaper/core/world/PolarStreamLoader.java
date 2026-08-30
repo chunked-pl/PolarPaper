@@ -289,6 +289,11 @@ public class PolarStreamLoader {
                 }));
     }
 
+    public static boolean holdsPosition(@NotNull ServerLevel level, int chunkX, int chunkZ) {
+        NewChunkHolder holder = level.moonrise$getChunkTaskScheduler().chunkHolderManager.getChunkHolder(chunkX, chunkZ);
+        return holder != null && holder.getCurrentChunk() != null;
+    }
+
     public static @Nullable LevelChunk liveChunkAt(@NotNull ServerLevel level, int chunkX, int chunkZ) {
         NewChunkHolder holder = level.moonrise$getChunkTaskScheduler().chunkHolderManager.getChunkHolder(chunkX, chunkZ);
         return holder != null && holder.getCurrentChunk() instanceof LevelChunk chunk ? chunk : null;
