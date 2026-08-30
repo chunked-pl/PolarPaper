@@ -27,6 +27,8 @@ import net.minecraft.world.level.block.EntityBlock;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.chunk.LevelChunkSection;
@@ -53,7 +55,9 @@ import java.lang.invoke.MethodType;
 import java.lang.invoke.VarHandle;
 import java.util.ArrayList;
 import java.util.EnumSet;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 
@@ -362,7 +366,25 @@ public class PolarStreamLoader {
         worldAccess.loadChunkData(world, target, userData, blockSelector);
 
         relight(serverLevel, target);
-        world.refreshChunk(target.locX, target.locZ);
+        resendChunk(serverLevel, target);
+    }
+
+    public static void resendChunk(@NotNull ServerLevel serverLevel, @NotNull LevelChunk chunk) {
+        int chunkX = chunk.locX;
+        int chunkZ = chunk.locZ;
+        int radius = serverLevel.getServer().getPlayerList().getViewDistance() + 1;
+        Map<Boolean, ClientboundLevelChunkWithLightPacket> packets = new HashMap<>(2);
+
+        for (ServerPlayer player : serverLevel.players()) {
+            if (player.connection == null) continue;
+
+            ChunkPos watching = player.chunkPosition();
+            if (Math.abs(watching.x() - chunkX) > radius || Math.abs(watching.z() - chunkZ) > radius) continue;
+
+            boolean obfuscate = serverLevel.chunkPacketBlockController.shouldModify(player, chunk);
+            player.connection.send(packets.computeIfAbsent(obfuscate,
+                    modify -> new ClientboundLevelChunkWithLightPacket(chunk, serverLevel.getLightEngine(), null, null, modify)));
+        }
     }
 
     private static void relight(@NotNull ServerLevel serverLevel, @NotNull LevelChunk chunk) {
