@@ -346,7 +346,9 @@ public class Polar {
         if (generator == null) return CompletableFuture.completedFuture(false);
 
         ServerLevel level = ((CraftWorld) world).getHandle();
-        if (PolarStreamLoader.liveChunkAt(level, chunkX, chunkZ) != null) return CompletableFuture.completedFuture(false);
+        if (PolarStreamLoader.liveChunkAt(level, chunkX, chunkZ) != null) {
+            return CompletableFuture.completedFuture(standInForArchivedChunk(generator, chunkX, chunkZ));
+        }
 
         BlockSelector blockSelector = generator.getWorldBlockSelector();
         PolarChunk chunk = new PolarChunk(chunkX, chunkZ, level.getSectionsCount());
@@ -354,16 +356,27 @@ public class Polar {
 
         return PolarStreamLoader.prepareChunkAsync(levelChunk)
                 .thenCompose(_ -> TaskFutures.runSync(PolarPaper.getPlugin(), () -> {
-                    if (PolarStreamLoader.liveChunkAt(level, chunkX, chunkZ) != null) return false;
+                    if (PolarStreamLoader.liveChunkAt(level, chunkX, chunkZ) != null) {
+                        return standInForArchivedChunk(generator, chunkX, chunkZ);
+                    }
 
                     levelChunk.tryMarkSaved();
 
-                    if (!PolarStreamLoader.insertChunk(level, levelChunk)) return false;
+                    if (!PolarStreamLoader.insertChunk(level, levelChunk)) {
+                        return standInForArchivedChunk(generator, chunkX, chunkZ);
+                    }
                     retainChunk(world, chunkX, chunkZ);
 
                     generator.markPlaceholderChunk(chunkX, chunkZ);
                     return true;
                 }));
+    }
+
+    private static boolean standInForArchivedChunk(@NotNull PolarStreamingGenerator generator, int chunkX, int chunkZ) {
+        if (!generator.getChunkArchive().contains(chunkX, chunkZ)) return false;
+
+        generator.markPlaceholderChunk(chunkX, chunkZ);
+        return true;
     }
 
     private static @Nullable PolarStreamingGenerator streamingGeneratorOf(@NotNull World world) {
